@@ -63,7 +63,7 @@ export default function Dossiers() {
 
   const DossierCard = ({ dossier }) => (
     <div
-      className="card hover:shadow-xl transition-all duration-300 cursor-pointer"
+      className="card card-hover cursor-pointer"
       onClick={() => setSelectedDossier(dossier)}
     >
       <div className="flex items-start space-x-4">
@@ -76,7 +76,7 @@ export default function Dossiers() {
               className="w-16 h-16 rounded-full object-cover"
             />
           ) : (
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-2xl font-bold">
+            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-cyan-600 to-teal-600 flex items-center justify-center text-white text-2xl font-bold">
               {dossier.full_name?.charAt(0) || '?'}
             </div>
           )}
@@ -86,8 +86,8 @@ export default function Dossiers() {
         <div className="flex-1 min-w-0">
           <div className="flex items-start justify-between mb-2">
             <div>
-              <h3 className="text-xl font-bold text-gray-900 mb-1">{dossier.full_name}</h3>
-              <p className="text-sm text-gray-600">{dossier.title || 'No title'}</p>
+              <h3 className="text-xl font-bold text-white mb-1">{dossier.full_name}</h3>
+              <p className="text-sm text-gray-300">{dossier.title || 'No title'}</p>
             </div>
             {dossier.score && (
               <div className="flex items-center space-x-1 bg-yellow-50 px-3 py-1 rounded-full">
@@ -99,25 +99,25 @@ export default function Dossiers() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-2 mb-3">
             {dossier.company_name && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="flex items-center space-x-2 text-sm text-gray-300">
                 <Building className="w-4 h-4" />
                 <span>{dossier.company_name}</span>
               </div>
             )}
             {dossier.location && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="flex items-center space-x-2 text-sm text-gray-300">
                 <MapPin className="w-4 h-4" />
                 <span>{dossier.location}</span>
               </div>
             )}
             {dossier.email && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="flex items-center space-x-2 text-sm text-gray-300">
                 <Mail className="w-4 h-4" />
                 <span className="truncate">{dossier.email}</span>
               </div>
             )}
             {dossier.phone && (
-              <div className="flex items-center space-x-2 text-sm text-gray-600">
+              <div className="flex items-center space-x-2 text-sm text-gray-300">
                 <Phone className="w-4 h-4" />
                 <span>{dossier.phone}</span>
               </div>
@@ -126,12 +126,12 @@ export default function Dossiers() {
 
           <div className="flex items-center space-x-2 mb-3">
             {dossier.tier && (
-              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-purple-100 text-purple-700">
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-gray-700/50 text-gray-200 border border-gray-600">
                 {dossier.tier}
               </span>
             )}
             {dossier.status && (
-              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-blue-100 text-blue-700">
+              <span className="px-3 py-1 rounded-full text-xs font-semibold bg-cyan-600/30 text-cyan-200 border border-cyan-500/60">
                 {dossier.status}
               </span>
             )}
@@ -144,7 +144,7 @@ export default function Dossiers() {
           </div>
 
           {dossier.about_summary && (
-            <p className="text-sm text-gray-600 line-clamp-2 mb-3">{dossier.about_summary}</p>
+            <p className="text-sm text-gray-300 line-clamp-2 mb-3">{dossier.about_summary}</p>
           )}
 
           {/* Dossier Actions */}
@@ -156,7 +156,7 @@ export default function Dossiers() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-blue-600 to-indigo-600 text-white rounded-lg hover:from-blue-700 hover:to-indigo-700 transition-all duration-200 text-sm font-medium"
+                  className="flex items-center space-x-2 px-4 py-2 bg-gradient-to-r from-cyan-600 to-teal-600 text-white rounded-lg hover:from-cyan-500 hover:to-teal-500 transition-all duration-200 text-sm font-medium"
                 >
                   <Download className="w-4 h-4" />
                   <span>Download</span>
@@ -166,7 +166,7 @@ export default function Dossiers() {
                   target="_blank"
                   rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
-                  className="flex items-center space-x-2 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-all duration-200 text-sm font-medium"
+                  className="flex items-center space-x-2 px-4 py-2 bg-gray-800/50 text-gray-300 rounded-lg hover:bg-gray-700/50 transition-all duration-200 text-sm font-medium"
                 >
                   <ExternalLink className="w-4 h-4" />
                   <span>View</span>
@@ -194,7 +194,7 @@ export default function Dossiers() {
                   className="w-20 h-20 rounded-full object-cover"
                 />
               ) : (
-                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-3xl font-bold">
+                <div className="w-20 h-20 rounded-full bg-gradient-to-br from-cyan-600 to-teal-600 flex items-center justify-center text-white text-3xl font-bold">
                   {dossier.full_name?.charAt(0) || '?'}
                 </div>
               )}
@@ -255,12 +255,12 @@ export default function Dossiers() {
             {/* Status and Tier */}
             <div className="flex items-center space-x-2">
               {dossier.tier && (
-                <span className="px-4 py-2 rounded-lg text-sm font-semibold bg-purple-100 text-purple-700">
+                <span className="px-4 py-2 rounded-lg text-sm font-semibold bg-gray-700/50 text-gray-200 border border-gray-600">
                   Tier: {dossier.tier}
                 </span>
               )}
               {dossier.status && (
-                <span className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-100 text-blue-700">
+                <span className="px-4 py-2 rounded-lg text-sm font-semibold bg-green-600/30 text-green-200 border border-green-500/60">
                   Status: {dossier.status}
                 </span>
               )}
@@ -373,12 +373,12 @@ export default function Dossiers() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex justify-between items-center">
+      <div className="flex justify-between items-center animate-slideInLeft">
         <div>
-          <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-2">
+          <h1 className="text-4xl font-bold text-gradient mb-2">
             Dossiers
           </h1>
-          <p className="text-gray-600 text-lg">View and manage lead dossiers ({filteredDossiers.length} total)</p>
+          <p className="text-gray-300 text-lg">View and manage lead dossiers ({filteredDossiers.length} total)</p>
         </div>
         <button
           onClick={fetchDossiers}
@@ -391,7 +391,7 @@ export default function Dossiers() {
       </div>
 
       {/* Filters */}
-      <div className="card">
+      <div className="card animate-slideInUp">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* Search */}
           <div className="relative">
@@ -401,7 +401,7 @@ export default function Dossiers() {
               placeholder="Search by name, company, email..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all duration-200 outline-none"
+              className="input-field w-full pl-10 pr-4 py-3"
             />
           </div>
 
@@ -411,7 +411,7 @@ export default function Dossiers() {
             <select
               value={filterTier}
               onChange={(e) => setFilterTier(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all duration-200 outline-none appearance-none bg-white"
+              className="input-field w-full pl-10 pr-4 py-3"
             >
               <option value="all">All Tiers</option>
               <option value="Gold">Gold</option>
@@ -426,7 +426,7 @@ export default function Dossiers() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 rounded-lg border border-gray-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 transition-all duration-200 outline-none appearance-none bg-white"
+              className="input-field w-full pl-10 pr-4 py-3"
             >
               <option value="all">All Statuses</option>
               <option value="new">New</option>
@@ -440,15 +440,17 @@ export default function Dossiers() {
 
       {/* Dossiers Grid */}
       {filteredDossiers.length === 0 ? (
-        <div className="card text-center py-12">
-          <FileText className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-          <h3 className="text-xl font-semibold text-gray-900 mb-2">No dossiers found</h3>
-          <p className="text-gray-600">Try adjusting your filters or search term</p>
+        <div className="card text-center py-12 animate-slideInUp">
+          <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <h3 className="text-xl font-semibold text-white mb-2">No dossiers found</h3>
+          <p className="text-gray-400">Try adjusting your filters or search term</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6">
-          {filteredDossiers.map((dossier) => (
-            <DossierCard key={dossier.id} dossier={dossier} />
+          {filteredDossiers.map((dossier, index) => (
+            <div key={dossier.id} className="animate-slideInUp" style={{ animationDelay: `${index * 0.1}s` }}>
+              <DossierCard dossier={dossier} />
+            </div>
           ))}
         </div>
       )}

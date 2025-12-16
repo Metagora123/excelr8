@@ -272,17 +272,17 @@ export default function PostRadar() {
   return (
     <div className="max-w-5xl mx-auto space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-4xl font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent mb-2">
+      <div className="animate-slideInLeft">
+        <h1 className="text-4xl font-bold text-gradient mb-2">
           Post Radar
         </h1>
-        <p className="text-gray-600 text-lg">Track and analyze LinkedIn posts from your leads</p>
+        <p className="text-gray-300 text-lg">Track and analyze LinkedIn posts from your leads</p>
       </div>
 
       {/* Search Bar */}
-      <div className="card">
+      <div className="card animate-slideInUp">
         <div className="space-y-4">
-          <label className="block text-sm font-semibold text-gray-700">
+          <label className="block text-sm font-semibold text-gray-300">
             LinkedIn Post URL
           </label>
           <div className="flex space-x-3">
@@ -292,7 +292,7 @@ export default function PostRadar() {
               onChange={(e) => setPostUrl(e.target.value)}
               onKeyPress={handleKeyPress}
               placeholder="https://www.linkedin.com/feed/update/urn:li:activity:7346827663526744065/"
-              className="flex-1 px-4 py-3 border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              className="input-field flex-1"
             />
             <button
               onClick={handleSearch}
@@ -312,7 +312,7 @@ export default function PostRadar() {
               )}
             </button>
           </div>
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-400">
             Paste a LinkedIn post URL to check if it exists in your database or fetch it from LinkedIn
           </p>
         </div>
@@ -320,12 +320,12 @@ export default function PostRadar() {
 
       {/* Error Message */}
       {error && (
-        <div className="card bg-red-50 border border-red-200">
+        <div className="card bg-red-900/30 border border-red-500/50 animate-slideInUp">
           <div className="flex items-start space-x-3">
-            <AlertCircle className="w-5 h-5 text-red-600 mt-0.5" />
+            <AlertCircle className="w-5 h-5 text-red-400 mt-0.5" />
             <div>
-              <h3 className="font-semibold text-red-900">Error</h3>
-              <p className="text-red-700">{error}</p>
+              <h3 className="font-semibold text-red-200">Error</h3>
+              <p className="text-red-300">{error}</p>
             </div>
           </div>
         </div>
@@ -333,19 +333,19 @@ export default function PostRadar() {
 
       {/* Post Data Display */}
       {postData && (
-        <div className="space-y-6">
+        <div className="space-y-6 animate-slideHorizontal">
           {/* Source Badge */}
           <div className="flex items-center justify-between">
             <div className="flex items-center space-x-2">
               <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
                 source === 'supabase' 
-                  ? 'bg-green-100 text-green-700' 
-                  : 'bg-blue-100 text-blue-700'
+                  ? 'bg-cyan-600/30 text-cyan-200 border border-cyan-500/60' 
+                  : 'bg-teal-600/30 text-teal-200 border border-teal-500/60'
               }`}>
                 {source === 'supabase' ? '✓ Found in Database' : '↓ Fetched from LinkedIn'}
               </span>
               {postData.status && (
-                <span className="px-3 py-1 rounded-full text-sm font-semibold bg-purple-100 text-purple-700">
+                <span className="px-3 py-1 rounded-full text-sm font-semibold bg-gray-700/50 text-gray-200 border border-gray-600">
                   {postData.status}
                 </span>
               )}
@@ -354,7 +354,7 @@ export default function PostRadar() {
               href={postData.postUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center space-x-2 text-blue-600 hover:text-blue-700 font-medium"
+              className="flex items-center space-x-2 text-cyan-300 hover:text-cyan-200 font-medium"
             >
               <span>View on LinkedIn</span>
               <ExternalLink className="w-4 h-4" />
@@ -362,16 +362,16 @@ export default function PostRadar() {
           </div>
 
           {/* Author Info */}
-          <div className="card">
+          <div className="card animate-slideInLeft">
             <div className="flex items-start justify-between">
               <div className="space-y-3">
                 <div className="flex items-center space-x-3">
-                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xl font-semibold">
+                  <div className="w-12 h-12 rounded-full bg-gradient-to-br from-cyan-600 to-teal-600 flex items-center justify-center text-white text-xl font-semibold">
                     {postData.leadName?.charAt(0) || '?'}
                   </div>
                   <div>
-                    <h2 className="text-2xl font-bold text-gray-900">{postData.leadName}</h2>
-                    <p className="text-gray-600 flex items-center space-x-2">
+                    <h2 className="text-2xl font-bold text-white">{postData.leadName}</h2>
+                    <p className="text-gray-300 flex items-center space-x-2">
                       <Building2 className="w-4 h-4" />
                       <span>{postData.leadCompany}</span>
                     </p>
@@ -379,8 +379,8 @@ export default function PostRadar() {
                 </div>
                 {postData.topic && postData.topic !== '-' && (
                   <div className="flex items-center space-x-2 text-sm">
-                    <Tag className="w-4 h-4 text-gray-500" />
-                    <span className="px-3 py-1 rounded-full bg-gray-100 text-gray-700 font-medium">
+                    <Tag className="w-4 h-4 text-gray-400" />
+                    <span className="px-3 py-1 rounded-full bg-gray-800/50 text-gray-200 border border-gray-700 font-medium">
                       {postData.topic}
                     </span>
                   </div>
@@ -390,9 +390,9 @@ export default function PostRadar() {
           </div>
 
           {/* Post Content */}
-          <div className="card">
-            <h3 className="text-lg font-semibold text-gray-900 mb-3">Post Content</h3>
-            <p className="text-gray-700 whitespace-pre-wrap leading-relaxed">{postData.content}</p>
+          <div className="card animate-slideInRight">
+            <h3 className="text-lg font-semibold text-white mb-3">Post Content</h3>
+            <p className="text-gray-300 whitespace-pre-wrap leading-relaxed">{postData.content}</p>
             
             {postData.attachments && postData.attachments.length > 0 && (
               <div className="mt-4 grid grid-cols-2 gap-3">
@@ -410,47 +410,47 @@ export default function PostRadar() {
 
           {/* Engagement Stats */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="card text-center">
+            <div className="card text-center animate-slideInUp" style={{ animationDelay: '0.1s' }}>
               <div className="flex justify-center mb-2">
-                <div className="w-12 h-12 bg-gradient-to-br from-pink-400 to-rose-500 rounded-full flex items-center justify-center">
+                <div className="w-12 h-12 bg-gradient-to-br from-cyan-600 to-teal-600 rounded-full flex items-center justify-center">
                   <ThumbsUp className="w-6 h-6 text-white" />
                 </div>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{postData.reactions}</p>
-              <p className="text-sm text-gray-600">Reactions</p>
+              <p className="text-3xl font-bold text-white">{postData.reactions}</p>
+              <p className="text-sm text-gray-300">Reactions</p>
             </div>
 
-            <div className="card text-center">
+            <div className="card text-center animate-slideInUp" style={{ animationDelay: '0.2s' }}>
               <div className="flex justify-center mb-2">
-                <div className="w-12 h-12 bg-gradient-to-br from-blue-400 to-indigo-500 rounded-full flex items-center justify-center">
+                <div className="w-12 h-12 bg-gradient-to-br from-teal-600 to-cyan-600 rounded-full flex items-center justify-center">
                   <MessageCircle className="w-6 h-6 text-white" />
                 </div>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{postData.comments}</p>
-              <p className="text-sm text-gray-600">Comments</p>
+              <p className="text-3xl font-bold text-white">{postData.comments}</p>
+              <p className="text-sm text-gray-300">Comments</p>
             </div>
 
             {postData.impressions !== undefined && (
-              <div className="card text-center">
+              <div className="card text-center animate-slideInUp" style={{ animationDelay: '0.3s' }}>
                 <div className="flex justify-center mb-2">
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-400 to-violet-500 rounded-full flex items-center justify-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-gray-600 to-gray-700 rounded-full flex items-center justify-center">
                     <Users className="w-6 h-6 text-white" />
                   </div>
                 </div>
-                <p className="text-3xl font-bold text-gray-900">{postData.impressions}</p>
-                <p className="text-sm text-gray-600">Impressions</p>
+                <p className="text-3xl font-bold text-white">{postData.impressions}</p>
+                <p className="text-sm text-gray-300">Impressions</p>
               </div>
             )}
 
             {postData.reposts !== undefined && (
-              <div className="card text-center">
+              <div className="card text-center animate-slideInUp" style={{ animationDelay: '0.4s' }}>
                 <div className="flex justify-center mb-2">
-                  <div className="w-12 h-12 bg-gradient-to-br from-green-400 to-emerald-500 rounded-full flex items-center justify-center">
+                  <div className="w-12 h-12 bg-gradient-to-br from-cyan-600 to-teal-600 rounded-full flex items-center justify-center">
                     <ExternalLink className="w-6 h-6 text-white" />
                   </div>
                 </div>
-                <p className="text-3xl font-bold text-gray-900">{postData.reposts}</p>
-                <p className="text-sm text-gray-600">Reposts</p>
+                <p className="text-3xl font-bold text-white">{postData.reposts}</p>
+                <p className="text-sm text-gray-300">Reposts</p>
               </div>
             )}
           </div>
