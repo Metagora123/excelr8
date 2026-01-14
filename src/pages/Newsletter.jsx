@@ -42,13 +42,32 @@ export default function Newsletter() {
   const fetchDateFolders = async () => {
     try {
       setLoading(true);
+      console.log('[Newsletter] Fetching date folders...');
       const dates = await getDateFolders();
+      console.log('[Newsletter] Successfully loaded', dates.length, 'date folders');
       setDateFolders(dates);
+      setStatus(null); // Clear any previous errors
     } catch (error) {
-      console.error('Error fetching date folders:', error);
+      console.error('[Newsletter] Error fetching date folders:', error);
+      console.error('[Newsletter] Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name,
+      });
+      
+      // More helpful error message for users
+      let errorMessage = 'Failed to load date folders. ';
+      if (error.message.includes('404') || error.message.includes('not found')) {
+        errorMessage += 'The R2 API server is not accessible. Make sure the production server is running.';
+      } else if (error.message.includes('Network error') || error.message.includes('fetch')) {
+        errorMessage += 'Cannot connect to the R2 API server. Check your network connection and server status.';
+      } else {
+        errorMessage += error.message || 'Please check your R2 configuration.';
+      }
+      
       setStatus({
         type: 'error',
-        message: 'Failed to load date folders. Please check your R2 configuration.',
+        message: errorMessage,
       });
     } finally {
       setLoading(false);
