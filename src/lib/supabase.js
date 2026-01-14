@@ -9,30 +9,55 @@ if (!supabaseUrl || !supabaseAnonKey) {
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
+// Helper function to fetch all records with pagination
+const fetchAllRecords = async (queryBuilderFn, pageSize = 1000) => {
+  const allRecords = []
+  let from = 0
+  let hasMore = true
+
+  while (hasMore) {
+    const to = from + pageSize - 1
+    // Create a fresh query builder for each page
+    const queryBuilder = queryBuilderFn()
+    const { data, error } = await queryBuilder.range(from, to)
+    
+    if (error) throw error
+    
+    if (data && data.length > 0) {
+      allRecords.push(...data)
+      // If we got fewer records than requested, we've reached the end
+      hasMore = data.length === pageSize
+      from += pageSize
+    } else {
+      hasMore = false
+    }
+  }
+
+  return allRecords
+}
+
 // Helper functions for common queries
 export const leadQueries = {
-  // Get all leads
+  // Get all leads (with pagination)
   getAll: async () => {
-    const { data, error } = await supabase
+    const queryBuilderFn = () => supabase
       .from('leads')
       .select('*')
       .order('created_at', { ascending: false })
     
-    if (error) throw error
-    return data
+    return await fetchAllRecords(queryBuilderFn)
   },
 
-  // Get leads with dossiers
+  // Get leads with dossiers (with pagination)
   getWithDossiers: async () => {
-    const { data, error } = await supabase
+    const queryBuilderFn = () => supabase
       .from('leads')
       .select('*')
       .eq('is_dossier', true)
       .not('dossier_url', 'is', null)
       .order('created_at', { ascending: false })
     
-    if (error) throw error
-    return data
+    return await fetchAllRecords(queryBuilderFn)
   },
 
   // Get lead by ID
@@ -47,37 +72,35 @@ export const leadQueries = {
     return data
   },
 
-  // Get leads by status
+  // Get leads by status (with pagination)
   getByStatus: async (status) => {
-    const { data, error } = await supabase
+    const queryBuilderFn = () => supabase
       .from('leads')
       .select('*')
       .eq('status', status)
       .order('created_at', { ascending: false })
     
-    if (error) throw error
-    return data
+    return await fetchAllRecords(queryBuilderFn)
   },
 
-  // Get leads by tier
+  // Get leads by tier (with pagination)
   getByTier: async (tier) => {
-    const { data, error } = await supabase
+    const queryBuilderFn = () => supabase
       .from('leads')
       .select('*')
       .eq('tier', tier)
       .order('score', { ascending: false })
     
-    if (error) throw error
-    return data
+    return await fetchAllRecords(queryBuilderFn)
   },
 
-  // Get stats
+  // Get stats (with pagination to get all records)
   getStats: async () => {
-    const { data, error } = await supabase
+    const queryBuilderFn = () => supabase
       .from('leads')
       .select('status, tier, is_dossier, score')
     
-    if (error) throw error
+    const data = await fetchAllRecords(queryBuilderFn)
     
     return {
       total: data.length,
@@ -92,7 +115,9 @@ export const leadQueries = {
         }
         return acc
       }, {}),
-      averageScore: data.reduce((sum, lead) => sum + (lead.score || 0), 0) / data.length
+      averageScore: data.length > 0 
+        ? data.reduce((sum, lead) => sum + (lead.score || 0), 0) / data.length 
+        : 0
     }
   }
 }

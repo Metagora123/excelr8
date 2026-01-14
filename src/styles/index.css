@@ -3,56 +3,116 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* Default theme colors - will be overridden by theme context */
+    --theme-primary: #06b6d4;
+    --theme-primaryDark: #0891b2;
+    --theme-primaryLight: #22d3ee;
+    --theme-secondary: #14b8a6;
+    --theme-secondaryDark: #0d9488;
+    --theme-secondaryLight: #2dd4bf;
+    --theme-bg: #0a0a0a;
+    --theme-bgAccent: #1a1a1a;
+    --theme-border: rgba(6, 182, 212, 0.3);
+    --theme-borderHover: rgba(6, 182, 212, 0.6);
+    --theme-borderLight: rgba(6, 182, 212, 0.2);
+    --theme-textPrimary: #ffffff;
+    --theme-textSecondary: #e5e7eb;
+    --theme-textTertiary: #9ca3af;
+    --theme-gradientFrom: #0891b2;
+    --theme-gradientTo: #0d9488;
+    --theme-gradientVia: #06b6d4;
+    --theme-shadow: rgba(6, 182, 212, 0.5);
+    --theme-shadowHover: rgba(6, 182, 212, 0.6);
+    --theme-mesh1: rgba(6, 182, 212, 0.15);
+    --theme-mesh2: rgba(20, 184, 166, 0.15);
+    --theme-mesh3: rgba(8, 145, 178, 0.12);
+    --theme-mesh4: rgba(6, 182, 212, 0.15);
+  }
+
   body {
     @apply text-white;
-    background: #0a0a0a;
+    background: var(--theme-bg);
     min-height: 100vh;
   }
   
   * {
-    @apply border-cyan-500/20;
+    border-color: var(--theme-borderLight);
   }
 }
 
 @layer components {
-  /* Card Components - Much better contrast */
+  /* Card Components */
   .card {
-    @apply bg-[#1a1a1a]/80 rounded-2xl shadow-2xl p-6 border border-cyan-500/30;
+    @apply rounded-2xl shadow-2xl p-6;
+    background: color-mix(in srgb, var(--theme-bgAccent) 80%, transparent);
+    border: 1px solid var(--theme-border);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
   }
   
   .card-glass {
-    @apply bg-[#1a1a1a]/60 rounded-2xl shadow-2xl p-6 border border-cyan-400/30;
+    @apply rounded-2xl shadow-2xl p-6;
+    background: color-mix(in srgb, var(--theme-bgAccent) 60%, transparent);
+    border: 1px solid var(--theme-border);
     backdrop-filter: blur(30px);
     -webkit-backdrop-filter: blur(30px);
   }
   
   .card-hover {
-    @apply transition-all duration-300 hover:shadow-cyan-500/30 hover:shadow-2xl hover:border-cyan-400/60 hover:scale-[1.01];
+    @apply transition-all duration-300 hover:scale-[1.01];
+  }
+  
+  .card-hover:hover {
+    box-shadow: 0 25px 50px -12px var(--theme-shadow);
+    border-color: var(--theme-borderHover);
   }
 
   /* Button Components */
   .btn-primary {
-    @apply bg-gradient-to-r from-cyan-600 via-teal-600 to-cyan-500 text-white px-6 py-3 rounded-xl font-semibold hover:from-cyan-500 hover:via-teal-500 hover:to-cyan-400 transition-all duration-300 shadow-lg shadow-cyan-500/50 hover:shadow-cyan-400/60 hover:scale-105;
+    @apply text-white px-6 py-3 rounded-xl font-semibold transition-all duration-300 shadow-lg hover:scale-105;
+    background: linear-gradient(to right, var(--theme-gradientFrom), var(--theme-gradientTo));
+    box-shadow: 0 10px 15px -3px var(--theme-shadow);
+  }
+  
+  .btn-primary:hover {
+    background: linear-gradient(to right, var(--theme-primaryLight), var(--theme-secondaryLight));
+    box-shadow: 0 10px 15px -3px var(--theme-shadowHover);
   }
   
   .btn-secondary {
-    @apply bg-gray-800/80 text-white px-6 py-3 rounded-xl font-semibold hover:bg-gray-700/80 transition-all duration-300 border border-cyan-500/30 hover:border-cyan-400/50 backdrop-blur-xl;
+    @apply text-white px-6 py-3 rounded-xl font-semibold transition-all duration-300 backdrop-blur-xl;
+    background: color-mix(in srgb, #1f2937 80%, transparent);
+    border: 1px solid var(--theme-border);
+  }
+  
+  .btn-secondary:hover {
+    background: color-mix(in srgb, #374151 80%, transparent);
+    border-color: var(--theme-borderHover);
   }
   
   .btn-outline {
-    @apply bg-transparent border-2 border-cyan-400 text-cyan-300 px-6 py-3 rounded-xl font-semibold hover:bg-cyan-500/20 hover:border-cyan-300 transition-all duration-300 hover:scale-105;
+    @apply bg-transparent border-2 px-6 py-3 rounded-xl font-semibold transition-all duration-300 hover:scale-105;
+    border-color: var(--theme-primaryLight);
+    color: var(--theme-primaryLight);
+  }
+  
+  .btn-outline:hover {
+    background: color-mix(in srgb, var(--theme-primary) 20%, transparent);
+    border-color: var(--theme-primary);
+    color: var(--theme-primary);
   }
 
-  /* Input Components - Better visibility */
+  /* Input Components */
   .input-field {
-  @apply w-full px-4 py-3 rounded-xl border border-cyan-500/40 bg-[#1a1a1a]/60 focus:border-cyan-400 focus:ring-2 focus:ring-cyan-500/50 transition-all duration-200 outline-none text-white placeholder-gray-500;
-  backdrop-filter: blur(10px);
+    @apply w-full px-4 py-3 rounded-xl transition-all duration-200 outline-none text-white placeholder-gray-500 backdrop-blur-sm;
+    border: 1px solid var(--theme-border);
+    background: color-mix(in srgb, var(--theme-bgAccent) 60%, transparent);
   }
   
   .input-field:focus {
-    @apply shadow-lg shadow-cyan-500/40;
+    border-color: var(--theme-primaryLight);
+    box-shadow: 0 0 0 2px var(--theme-shadow), 0 10px 15px -3px var(--theme-shadow);
   }
 
   .input-field::placeholder {
@@ -60,16 +120,16 @@
   opacity: 0.8;
 }
 
-  /* Text Gradients - More vibrant */
+  /* Text Gradients */
   .text-gradient {
-    background: linear-gradient(135deg, #06b6d4 0%, #14b8a6 50%, #22d3ee 100%);
+    background: linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
   
   .text-gradient-alt {
-    background: linear-gradient(135deg, #0891b2 0%, #06b6d4 50%, #14b8a6 100%);
+    background: linear-gradient(135deg, var(--theme-gradientFrom) 0%, var(--theme-gradientTo) 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -85,19 +145,27 @@
   }
   
   .badge-blue {
-    @apply bg-cyan-600/30 text-cyan-200 border border-cyan-500/60;
+    background: color-mix(in srgb, var(--theme-primary) 30%, transparent);
+    color: var(--theme-primaryLight);
+    border: 1px solid var(--theme-border);
   }
   
   .badge-green {
-    @apply bg-teal-600/30 text-teal-200 border border-teal-500/60;
+    background: color-mix(in srgb, var(--theme-secondary) 30%, transparent);
+    color: var(--theme-secondaryLight);
+    border: 1px solid var(--theme-border);
   }
   
   .badge-pink {
-    @apply bg-cyan-500/30 text-cyan-200 border border-cyan-400/60;
+    background: color-mix(in srgb, var(--theme-primary) 30%, transparent);
+    color: var(--theme-primaryLight);
+    border: 1px solid var(--theme-border);
   }
   
   .badge-cyan {
-    @apply bg-cyan-500/40 text-cyan-100 border border-cyan-400/70;
+    background: color-mix(in srgb, var(--theme-primary) 40%, transparent);
+    color: var(--theme-primaryLight);
+    border: 1px solid var(--theme-borderHover);
   }
   
   .badge-yellow {
@@ -110,15 +178,21 @@
   }
   
   thead tr {
-    @apply border-b-2 border-cyan-500/50;
+    border-bottom: 2px solid var(--theme-border);
   }
   
   thead th {
-    @apply text-left py-4 px-4 font-semibold text-cyan-200 uppercase text-sm tracking-wider;
+    @apply text-left py-4 px-4 font-semibold uppercase text-sm tracking-wider;
+    color: var(--theme-primaryLight);
   }
   
   tbody tr {
-    @apply border-b border-gray-800/50 hover:bg-cyan-900/20 transition-colors;
+    @apply border-b transition-colors;
+    border-color: color-mix(in srgb, var(--theme-bgAccent) 50%, transparent);
+  }
+  
+  tbody tr:hover {
+    background: color-mix(in srgb, var(--theme-primary) 20%, transparent);
   }
   
   tbody td {
@@ -141,16 +215,24 @@
   /* Divider */
   .divider-gradient {
     @apply h-px w-full;
-    background: linear-gradient(90deg, transparent 0%, #06b6d4 50%, transparent 100%);
+    background: linear-gradient(90deg, transparent 0%, var(--theme-primary) 50%, transparent 100%);
   }
 
   /* Navigation Link */
   .nav-link {
-    @apply text-gray-400 hover:text-cyan-300 transition-colors duration-200 font-medium px-4 py-2 rounded-lg hover:bg-gray-800/50;
+    @apply transition-colors duration-200 font-medium px-4 py-2 rounded-lg;
+    color: var(--theme-textTertiary);
+  }
+  
+  .nav-link:hover {
+    color: var(--theme-primaryLight);
+    background: color-mix(in srgb, var(--theme-bgAccent) 50%, transparent);
   }
   
   .nav-link-active {
-    @apply text-white bg-gradient-to-r from-cyan-600 to-teal-600 font-semibold shadow-lg shadow-cyan-500/30;
+    @apply text-white font-semibold shadow-lg;
+    background: linear-gradient(to right, var(--theme-gradientFrom), var(--theme-gradientTo));
+    box-shadow: 0 10px 15px -3px var(--theme-shadow);
   }
 }
 
@@ -166,13 +248,13 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: linear-gradient(135deg, #06b6d4 0%, #14b8a6 100%);
+  background: linear-gradient(135deg, var(--theme-primary) 0%, var(--theme-secondary) 100%);
   border-radius: 6px;
-  border: 2px solid #1a1a1a;
+  border: 2px solid var(--theme-bgAccent);
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: linear-gradient(135deg, #22d3ee 0%, #2dd4bf 100%);
+  background: linear-gradient(135deg, var(--theme-gradientFrom) 0%, var(--theme-gradientTo) 100%);
 }
 
 /* Animations */
@@ -280,10 +362,10 @@
 
 @keyframes glow {
   0%, 100% {
-    box-shadow: 0 0 25px rgba(6, 182, 212, 0.4);
+    box-shadow: 0 0 25px var(--theme-shadow);
   }
   50% {
-    box-shadow: 0 0 45px rgba(6, 182, 212, 0.7);
+    box-shadow: 0 0 45px var(--theme-shadowHover);
   }
 }
 
@@ -293,6 +375,15 @@
   }
   50% {
     transform: translateY(-10px);
+  }
+}
+
+@keyframes bounce-subtle {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-5px);
   }
 }
 
@@ -340,6 +431,10 @@
   animation: float 3s ease-in-out infinite;
 }
 
+.animate-bounce-subtle {
+  animation: bounce-subtle 2s ease-in-out infinite;
+}
+
 /* Recharts dark theme overrides */
 .recharts-surface {
   @apply rounded-xl;
@@ -355,6 +450,56 @@
   font-size: 13px;
 }
 
+/* Force black text for light themes on axis labels */
+[data-theme="excelr82"] .recharts-cartesian-axis-tick-value,
+[data-theme="upwork"] .recharts-cartesian-axis-tick-value {
+  fill: #000000 !important;
+}
+
+[data-theme="excelr82"] .recharts-cartesian-axis-tick text,
+[data-theme="upwork"] .recharts-cartesian-axis-tick text {
+  fill: #000000 !important;
+}
+
+/* Force dark text inside cards for Upwork and Excelr8 2.0 themes */
+[data-theme="upwork"] .card p,
+[data-theme="excelr82"] .card p,
+[data-theme="upwork"] .card span:not(.badge),
+[data-theme="excelr82"] .card span:not(.badge),
+[data-theme="upwork"] .card h1,
+[data-theme="excelr82"] .card h1,
+[data-theme="upwork"] .card h2,
+[data-theme="excelr82"] .card h2,
+[data-theme="upwork"] .card h3,
+[data-theme="excelr82"] .card h3,
+[data-theme="upwork"] .card h4,
+[data-theme="excelr82"] .card h4,
+[data-theme="upwork"] .card label,
+[data-theme="excelr82"] .card label {
+  color: #000000 !important;
+}
+
+/* Override specific text color classes in cards for light themes */
+[data-theme="upwork"] .card .text-white,
+[data-theme="excelr82"] .card .text-white {
+  color: #000000 !important;
+}
+
+[data-theme="upwork"] .card .text-gray-300,
+[data-theme="excelr82"] .card .text-gray-300 {
+  color: #4A4A4A !important;
+}
+
+[data-theme="upwork"] .card .text-gray-400,
+[data-theme="excelr82"] .card .text-gray-400 {
+  color: #6B6B6B !important;
+}
+
+[data-theme="upwork"] .card .text-gray-500,
+[data-theme="excelr82"] .card .text-gray-500 {
+  color: #808080 !important;
+}
+
 .recharts-legend-item-text {
   @apply text-gray-200;
 }
@@ -365,17 +510,19 @@
 
 /* Loading Spinner */
 .spinner {
-  @apply w-10 h-10 border-4 border-cyan-500/30 border-t-cyan-400 rounded-full animate-spin;
+  @apply w-10 h-10 border-4 rounded-full animate-spin;
+  border-color: var(--theme-border);
+  border-top-color: var(--theme-primaryLight);
 }
 
-/* Background mesh effect */
-.bg-mesh {
-  background-image: 
-    radial-gradient(at 0% 0%, rgba(6, 182, 212, 0.15) 0px, transparent 50%),
-    radial-gradient(at 100% 0%, rgba(20, 184, 166, 0.15) 0px, transparent 50%),
-    radial-gradient(at 100% 100%, rgba(34, 211, 238, 0.15) 0px, transparent 50%),
-    radial-gradient(at 0% 100%, rgba(6, 182, 212, 0.15) 0px, transparent 50%);
-}
+  /* Background mesh effect */
+  .bg-mesh {
+    background-image: 
+      radial-gradient(at 0% 0%, var(--theme-mesh1) 0px, transparent 50%),
+      radial-gradient(at 100% 0%, var(--theme-mesh2) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, var(--theme-mesh3) 0px, transparent 50%),
+      radial-gradient(at 0% 100%, var(--theme-mesh4) 0px, transparent 50%);
+  }
 
 /* Select dropdown styling */
 select.input-field {
@@ -388,10 +535,17 @@ select.input-field {
 
 /* Link styling */
 a {
-  @apply text-cyan-300 hover:text-cyan-200 transition-colors duration-200;
+  @apply transition-colors duration-200;
+  color: var(--theme-primaryLight);
+}
+
+a:hover {
+  color: var(--theme-primary);
 }
 
 /* Focus visible for accessibility */
 *:focus-visible {
-  @apply outline-none ring-2 ring-cyan-400 ring-offset-2 ring-offset-[#0a0a0a] rounded;
+  @apply outline-none rounded;
+  box-shadow: 0 0 0 2px var(--theme-primaryLight);
+  outline-offset: 2px;
 }

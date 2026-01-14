@@ -1,7 +1,10 @@
 import React, { useState, useCallback, useRef } from 'react';
 import { Upload, FileText, CheckCircle, XCircle, Loader2, Send } from 'lucide-react';
+import { useTheme } from '../contexts/ThemeContext';
 
 export default function FileIngestion() {
+  const { currentTheme } = useTheme();
+  const isLightTheme = currentTheme === 'excelr82' || currentTheme === 'upwork';
   const [file, setFile] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [uploadingFileName, setUploadingFileName] = useState('');
@@ -11,8 +14,8 @@ export default function FileIngestion() {
   const fileInputRef = useRef(null);
 
   const webhookUrl = import.meta.env.VITE_N8N_WEBHOOK_URL;
-  const testEndpoint = import.meta.env.VITE_N8N_TEST_ENDPOINT;
-  const prodEndpoint = import.meta.env.VITE_N8N_PROD_ENDPOINT;
+  const testEndpoint = import.meta.env.VITE_N8N_SUPABASE_TEST_ENDPOINT;
+  const prodEndpoint = import.meta.env.VITE_N8N_SUPABASE_PROD_ENDPOINT;
 
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -105,7 +108,7 @@ export default function FileIngestion() {
 
       <div className="card animate-slideInUp">
         <div className="mb-6">
-          <label className="block text-sm font-semibold text-gray-300 mb-3">
+          <label className="block text-sm font-semibold mb-3" style={{ color: isLightTheme ? '#000000' : '#D1D5DB' }}>
             Select Endpoint
           </label>
           <div className="grid grid-cols-2 gap-3">
@@ -114,7 +117,9 @@ export default function FileIngestion() {
               className={`px-4 py-3 rounded-xl font-medium transition-all duration-300 ${
                 endpoint === 'webhook-test'
                   ? 'bg-gradient-to-r from-cyan-600 to-teal-600 text-white shadow-lg scale-105'
-                  : 'bg-gray-800/50 text-gray-300 hover:bg-gray-700/50'
+                  : isLightTheme 
+                    ? 'hover:bg-gray-100' 
+                    : 'bg-gray-800/50 text-gray-300 hover:bg-gray-700/50'
               }`}
             >
               Test Webhook
@@ -124,7 +129,9 @@ export default function FileIngestion() {
               className={`px-4 py-3 rounded-xl font-medium transition-all duration-300 ${
                 endpoint === 'webhook'
                   ? 'bg-gradient-to-r from-green-600 to-emerald-500 text-white shadow-lg scale-105'
-                  : 'bg-gray-800/50 text-gray-300 hover:bg-gray-700/50'
+                  : isLightTheme 
+                    ? 'hover:bg-gray-100' 
+                    : 'bg-gray-800/50 text-gray-300 hover:bg-gray-700/50'
               }`}
             >
               Production
@@ -157,21 +164,21 @@ export default function FileIngestion() {
                 <div className="w-16 h-16 bg-gradient-to-br from-cyan-600 to-teal-600 rounded-full flex items-center justify-center mb-4 transform hover:scale-110 transition-transform duration-300 shadow-lg shadow-cyan-500/50">
                   <FileText className="w-8 h-8 text-white" />
                 </div>
-                <p className="text-xl font-semibold text-white mb-2">
+                <p className="text-xl font-semibold mb-2" style={{ color: isLightTheme ? '#000000' : '#FFFFFF' }}>
                   Drop your CSV file here
                 </p>
-                <p className="text-gray-400">or click to browse</p>
+                <p style={{ color: isLightTheme ? '#6B6B6B' : '#9CA3AF' }}>or click to browse</p>
               </div>
             </label>
           ) : (
-            <div className="flex items-center justify-between bg-gray-800/50 rounded-xl p-4 shadow-md">
+            <div className="flex items-center justify-between rounded-xl p-4 shadow-md" style={{ backgroundColor: isLightTheme ? 'rgba(0, 0, 0, 0.05)' : 'rgba(31, 41, 55, 0.5)' }}>
               <div className="flex items-center space-x-3">
                 <div className="w-12 h-12 bg-gradient-to-br from-cyan-600 to-teal-600 rounded-lg flex items-center justify-center">
                   <FileText className="w-6 h-6 text-white" />
                 </div>
                 <div className="text-left">
-                  <p className="font-semibold text-white">{file.name}</p>
-                  <p className="text-sm text-gray-400">
+                  <p className="font-semibold" style={{ color: isLightTheme ? '#000000' : '#FFFFFF' }}>{file.name}</p>
+                  <p className="text-sm" style={{ color: isLightTheme ? '#6B6B6B' : '#9CA3AF' }}>
                     {(file.size / 1024).toFixed(2)} KB
                   </p>
                 </div>
@@ -225,7 +232,7 @@ export default function FileIngestion() {
           )}
         </button>
 
-        <div className="mt-6 text-center text-sm text-gray-400">
+        <div className="mt-6 text-center text-sm" style={{ color: isLightTheme ? '#6B6B6B' : '#9CA3AF' }}>
           <p>Endpoint: {webhookUrl}/{endpoint === 'webhook-test' ? testEndpoint : prodEndpoint}/clay</p>
         </div>
       </div>
