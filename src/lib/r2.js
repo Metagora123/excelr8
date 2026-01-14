@@ -1,15 +1,18 @@
 // Cloudflare R2 utility functions
 // Using backend API to avoid CORS issues
 
-// Get API base URL - use environment variable in production, or relative path in dev
+// Get API base URL
+// In development: Uses Vite dev server plugin (vite-r2-plugin.js)
+// In production: Uses Vercel serverless functions (api/r2/*.js)
+// No separate server needed! Vercel automatically serves /api/* routes
 const getApiBaseUrl = () => {
-  // In production, use VITE_R2_API_URL if set, otherwise use relative path
-  // This allows the frontend to point to a separate server if needed
-  const baseUrl = import.meta.env.VITE_R2_API_URL || '';
+  // Always use relative path - Vercel will handle /api/* routes automatically
+  // In dev, Vite plugin handles it
+  // In prod, Vercel serverless functions handle it
+  const baseUrl = '';
   
-  // Production-friendly logging
   if (import.meta.env.PROD) {
-    console.log('[R2 API] Base URL:', baseUrl || '(using relative path)');
+    console.log('[R2 API] Using Vercel serverless functions (no separate server needed)');
   }
   
   return baseUrl;
