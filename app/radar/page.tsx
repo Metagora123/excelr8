@@ -98,17 +98,19 @@ function escapeCSV(val: string): string {
 }
 
 function downloadCSV(
-  rows: { name: string; headline?: string; profile_url?: string; matchScore?: number }[],
+  rows: { name: string; headline?: string; profile_url?: string; comment?: string; matchScore?: number }[],
   filename: string
 ) {
-  const headers = ["Name", "Headline", "Profile URL", "ICP Match Score"]
+  const hasComment = rows.some((r) => (r.comment ?? "").trim() !== "")
+  const headers = hasComment
+    ? ["Name", "Headline", "Profile URL", "Comment", "ICP Match Score"]
+    : ["Name", "Headline", "Profile URL", "ICP Match Score"]
   const lines = [headers.map(escapeCSV).join(",")]
   for (const r of rows) {
-    lines.push(
-      [r.name, r.headline ?? "", r.profile_url ?? "", r.matchScore != null ? String(r.matchScore) : ""]
-        .map(escapeCSV)
-        .join(",")
-    )
+    const cells = hasComment
+      ? [r.name, r.headline ?? "", r.profile_url ?? "", r.comment ?? "", r.matchScore != null ? String(r.matchScore) : ""]
+      : [r.name, r.headline ?? "", r.profile_url ?? "", r.matchScore != null ? String(r.matchScore) : ""]
+    lines.push(cells.map(escapeCSV).join(","))
   }
   const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" })
   const a = document.createElement("a")
@@ -370,6 +372,7 @@ export default function PostRadarPage() {
         name: p.name,
         headline: p.headline,
         profile_url: p.profile_url,
+        comment: p.text ?? "",
         matchScore: res?.matchScore,
       }
     })
@@ -418,12 +421,17 @@ export default function PostRadarPage() {
           return (
             <li
               key={p.id}
-              className="flex items-center justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm"
+              className="flex items-start justify-between gap-2 rounded-md border bg-muted/30 px-3 py-2 text-sm"
             >
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1 space-y-0.5">
                 <span className="font-medium">{p.name}</span>
                 {p.headline && (
                   <span className="text-muted-foreground block text-xs truncate">{p.headline}</span>
+                )}
+                {p.text && (
+                  <p className="text-muted-foreground text-xs line-clamp-2 mt-1 italic">
+                    &ldquo;{p.text}&rdquo;
+                  </p>
                 )}
               </div>
               {res != null && (

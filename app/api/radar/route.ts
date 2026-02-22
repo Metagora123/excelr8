@@ -142,7 +142,14 @@ function extractName(obj: Record<string, unknown> | null | undefined): string {
     (obj.name as string) ??
     (obj.full_name as string) ??
     (obj.formatted_name as string) ??
-    (obj.display_name as string)
+    (obj.display_name as string) ??
+    (obj.commenter_name as string) ??
+    (obj.author_name as string) ??
+    (obj.creator_name as string) ??
+    (obj.owner_name as string) ??
+    (obj.actor_name as string) ??
+    (obj.user_name as string) ??
+    (obj.from_name as string)
   if (name && String(name).trim()) return String(name).trim()
   const first = (obj.first_name as string) ?? ""
   const last = (obj.last_name as string) ?? ""
@@ -150,7 +157,50 @@ function extractName(obj: Record<string, unknown> | null | undefined): string {
   if (combined) return combined
   const pid = (obj.public_identifier as string) ?? (obj.username as string) ?? (obj.slug as string)
   if (pid && String(pid).trim()) return String(pid).trim()
+  // created_by / attributed_to might be a string (name) or object
+  const createdBy = obj.created_by ?? obj.attributed_to
+  if (typeof createdBy === "string" && createdBy.trim()) return createdBy.trim()
+  if (createdBy && typeof createdBy === "object" && typeof (createdBy as Record<string, unknown>).name === "string")
+    return String((createdBy as Record<string, unknown>).name).trim()
   return "Unknown"
+}
+
+/** Try to get commentator name from comment object top-level keys (many APIs put name here). */
+function extractCommenterNameFromComment(c: Record<string, unknown>): string | null {
+  const keys = [
+    "commenter_name",
+    "author_name",
+    "creator_name",
+    "display_name",
+    "commenter_display_name",
+    "commenter_full_name",
+    "owner_name",
+    "from_name",
+    "user_name",
+    "commenter",
+    "author",
+    "creator",
+    "posted_by",
+  ]
+  for (const key of keys) {
+    const v = c[key]
+    if (typeof v === "string" && v.trim()) return v.trim()
+    if (v && typeof v === "object" && typeof (v as Record<string, unknown>).name === "string") {
+      const n = String((v as Record<string, unknown>).name).trim()
+      if (n) return n
+    }
+  }
+  return null
+}
+
+/** Fallback label when we have no name: use comment preview or "Commentator N". */
+function commentFallbackLabel(c: Record<string, unknown>, index: number): string {
+  const text = c.text ?? c.body ?? c.content ?? c.message
+  if (typeof text === "string" && text.trim()) {
+    const preview = text.trim().slice(0, 40).replace(/\s+/g, " ")
+    return preview.length < text.trim().length ? `${preview}…` : preview
+  }
+  return `Commentator ${index + 1}`
 }
 
 /** Extract headline/title from Unipile-style object. */
@@ -188,6 +238,17 @@ function getPersonFromItem(item: Record<string, unknown>, forComment: boolean): 
         item.commenter,
         item.user,
         item.from,
+        item.member,
+        item.person,
+        item.profile,
+        item.commenter_profile,
+        item.author_profile,
+        item.creator_profile,
+        item.actor,
+        // Nested: e.g. comment.author or message.sender
+        (item.comment as Record<string, unknown> | undefined)?.author,
+        (item.comment as Record<string, unknown> | undefined)?.creator,
+        (item.message as Record<string, unknown> | undefined)?.sender,
       ]
     : [item.actor, item.owner, item.author, item.user, item.from]
   for (const c of candidates) {
@@ -213,11 +274,13 @@ function normalizeUnipileData(
 
   const toPersonFromComment = (c: Record<string, unknown>, i: number): RadarPerson => {
     const person = getPersonFromItem(c, true)
-    // Comment APIs sometimes put name/headline on the comment object itself
+    // 1) Comment-specific top-level keys (commenter_name, author_name, etc.)
+    const fromComment = extractCommenterNameFromComment(c)
     const name =
-      extractName(person) !== "Unknown"
-        ? extractName(person)
-        : extractName(c)
+      (fromComment && fromComment !== "Unknown") ? fromComment
+      : extractName(person) !== "Unknown" ? extractName(person)
+      : extractName(c) !== "Unknown" ? extractName(c)
+      : commentFallbackLabel(c, i)
     const headline = extractHeadline(person) ?? extractHeadline(c)
     const profileUrl = extractProfileUrl(person) ?? extractProfileUrl(c)
     return {
