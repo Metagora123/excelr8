@@ -28,6 +28,7 @@ export default function CampaignManagerPage() {
   const [managedBy, setManagedBy] = React.useState("")
   const [file, setFile] = React.useState<File | null>(null)
   const [endpoint, setEndpoint] = React.useState<"test" | "prod">("test")
+  const [supabaseProject, setSupabaseProject] = React.useState<"sales2k25" | "prod2k26">("sales2k25")
   const [loading, setLoading] = React.useState(false)
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [clients, setClients] = React.useState<{ id: string; name: string | null }[]>([])
@@ -35,13 +36,13 @@ export default function CampaignManagerPage() {
 
   const loadClients = React.useCallback(async () => {
     try {
-      const res = await fetch("/api/campaigns/clients")
+      const res = await fetch(`/api/campaigns/clients?project=${encodeURIComponent(supabaseProject)}`)
       if (res.ok) setClients(await res.json())
       else setClients([])
     } catch {
       setClients([])
     }
-  }, [])
+  }, [supabaseProject])
 
   React.useEffect(() => {
     loadClients()
@@ -67,6 +68,7 @@ export default function CampaignManagerPage() {
       formData.append("category", category)
       formData.append("managedBy", managedBy)
       formData.append("endpoint", endpoint)
+      formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/campaign-manager", { method: "POST", body: formData })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -103,6 +105,18 @@ export default function CampaignManagerPage() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label>Supabase project</Label>
+                <Select value={supabaseProject} onValueChange={(v) => setSupabaseProject(v as "sales2k25" | "prod2k26")}>
+                  <SelectTrigger className="w-[180px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="sales2k25">Sales 2k25</SelectItem>
+                    <SelectItem value="prod2k26">Prod 2k26</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <div className="space-y-2">
                 <Label htmlFor="campaign-name">Campaign name</Label>
                 <Input

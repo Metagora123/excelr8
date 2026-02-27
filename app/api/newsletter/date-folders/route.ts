@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server"
+import { listR2DatePrefixes } from "@/lib/r2"
 
-/** Returns a list of date folder names (YYYY-MM-DD) for the newsletter dropdown.
- *  Default: last 30 days, newest first. Replace with R2 list when wired. */
+/** Returns date folder names (YYYY-MM-DD) for the newsletter dropdown.
+ *  Uses R2 common prefixes when configured; otherwise last 30 days. */
 export async function GET() {
   try {
+    try {
+      const folders = await listR2DatePrefixes()
+      if (folders.length > 0) return NextResponse.json(folders)
+    } catch {
+      // R2 not configured or empty; fallback below
+    }
     const count = 30
     const folders: string[] = []
     const today = new Date()

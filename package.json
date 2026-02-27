@@ -4,11 +4,13 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "dev:webpack": "next dev --webpack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.999.0",
     "@base-ui/react": "^1.2.0",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/modifiers": "^9.0.0",
@@ -21,6 +23,7 @@
     "lucide-react": "^0.575.0",
     "next": "16.1.6",
     "next-themes": "^0.4.6",
+    "openai": "^6.25.0",
     "radix-ui": "^1.4.3",
     "react": "19.2.3",
     "react-dom": "19.2.3",

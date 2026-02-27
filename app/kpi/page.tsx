@@ -33,6 +33,7 @@ import {
   ReplyIcon,
   HeartIcon,
 } from "lucide-react"
+import { useSupabaseProject } from "@/lib/supabase-project-context"
 
 type KpiTotals = {
   campaigns: number
@@ -67,11 +68,12 @@ export default function KPIDashboardPage() {
   const [campaigns, setCampaigns] = React.useState<CampaignRow[]>([])
   const [loading, setLoading] = React.useState(true)
   const [selectedCampaignId, setSelectedCampaignId] = React.useState<string>("__none__")
+  const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch("/api/kpi")
+      const res = await fetch(`/api/kpi?project=${encodeURIComponent(project)}`)
       if (res.ok) {
         const data = await res.json()
         setTotals(data.totals)
@@ -86,7 +88,7 @@ export default function KPIDashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [project])
 
   React.useEffect(() => {
     load()

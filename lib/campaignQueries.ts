@@ -1,4 +1,4 @@
-import { getSupabase } from "./supabase"
+import { getSupabase, type SupabaseProject } from "./supabase"
 
 export type ClientRow = { id: string; name: string | null }
 
@@ -23,8 +23,8 @@ export type KpiTotals = {
   likes_reactions: number
 }
 
-export async function getClients(): Promise<ClientRow[]> {
-  const supabase = getSupabase()
+export async function getClients(project: SupabaseProject = "sales2k25"): Promise<ClientRow[]> {
+  const supabase = getSupabase(project)
   const { data, error } = await supabase
     .from("clients")
     .select("id, name")
@@ -33,8 +33,8 @@ export async function getClients(): Promise<ClientRow[]> {
   return (data ?? []) as ClientRow[]
 }
 
-export async function getAllCampaigns(): Promise<CampaignRow[]> {
-  const supabase = getSupabase()
+export async function getAllCampaigns(project: SupabaseProject = "sales2k25"): Promise<CampaignRow[]> {
+  const supabase = getSupabase(project)
   const { data, error } = await supabase
     .from("campaigns")
     .select("id, name, status, created_at, messages_sent, invites_sent, replies_received, comments_made, likes_reactions")
@@ -43,8 +43,8 @@ export async function getAllCampaigns(): Promise<CampaignRow[]> {
   return (data ?? []) as CampaignRow[]
 }
 
-export async function getKpiTotals(): Promise<KpiTotals> {
-  const campaigns = await getAllCampaigns()
+export async function getKpiTotals(project: SupabaseProject = "sales2k25"): Promise<KpiTotals> {
+  const campaigns = await getAllCampaigns(project)
   const totals: KpiTotals = {
     campaigns: campaigns.length,
     messages_sent: 0,

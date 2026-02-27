@@ -39,7 +39,10 @@ import {
   MailIcon,
   PhoneIcon,
   UserIcon,
+  Linkedin,
+  TargetIcon,
 } from "lucide-react"
+import { useSupabaseProject } from "@/lib/supabase-project-context"
 
 type DossierLead = {
   id: string
@@ -63,6 +66,7 @@ type DossierLead = {
   followers_count?: number | null
   connections_count?: number | null
   created_at?: string | null
+  campaign_name?: string | null
 }
 
 function getInitials(name: string | null | undefined) {
@@ -85,6 +89,14 @@ function formatDate(s: string | null | undefined) {
   }
 }
 
+/** Ensure URL is absolute so it opens correctly in a new tab. */
+function toAbsoluteUrl(url: string | null | undefined): string | null {
+  const s = (url ?? "").trim()
+  if (!s) return null
+  if (s.startsWith("http://") || s.startsWith("https://")) return s
+  return `https://${s.replace(/^\/*/, "")}`
+}
+
 export default function DossiersPage() {
   const [leads, setLeads] = React.useState<DossierLead[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -92,11 +104,12 @@ export default function DossiersPage() {
   const [tierFilter, setTierFilter] = React.useState<string>("all")
   const [statusFilter, setStatusFilter] = React.useState<string>("all")
   const [selected, setSelected] = React.useState<DossierLead | null>(null)
+  const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
     setLoading(true)
     try {
-      const res = await fetch("/api/dossiers")
+      const res = await fetch(`/api/dossiers?project=${encodeURIComponent(project)}`)
       if (res.ok) setLeads(await res.json())
       else setLeads([])
     } catch {
@@ -104,7 +117,7 @@ export default function DossiersPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [project])
 
   React.useEffect(() => {
     load()
@@ -186,7 +199,8 @@ export default function DossiersPage() {
             {filtered.map((lead) => (
               <Card
                 key={lead.id}
-                className="flex flex-col transition-colors hover:bg-muted/50"
+                className="flex flex-col transition-all duration-200 hover:bg-muted/70 hover:shadow-md hover:shadow-muted-foreground/10 hover:-translate-y-0.5 hover:ring-2 hover:ring-primary/25 cursor-pointer"
+                onClick={() => setSelected(lead)}
               >
                 <CardHeader className="pb-2">
                   <div className="flex items-start gap-3">
@@ -210,6 +224,18 @@ export default function DossiersPage() {
                           <span className="truncate">{lead.location}</span>
                         </div>
                       )}
+                      {(lead.email ?? "").trim() !== "" && (
+                        <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                          <MailIcon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{lead.email}</span>
+                        </div>
+                      )}
+                      {(lead.campaign_name ?? "").trim() && (
+                        <div className="flex items-center gap-1.5 text-muted-foreground text-xs">
+                          <TargetIcon className="h-3.5 w-3.5 shrink-0" />
+                          <span className="truncate">{lead.campaign_name}</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="flex flex-wrap gap-1.5 pt-2">
@@ -227,11 +253,11 @@ export default function DossiersPage() {
                     )}
                   </div>
                 </CardHeader>
-                <CardContent className="mt-auto flex flex-wrap gap-2 pt-2">
+                <CardContent className="mt-auto flex flex-wrap gap-2 pt-2" onClick={(e) => e.stopPropagation()}>
                   <Button
                     size="sm"
                     variant="default"
-                    className="gap-1.5"
+                    className="gap-1.5 transition-all duration-200 hover:brightness-110 hover:shadow-sm"
                     onClick={(e) => {
                       e.stopPropagation()
                       setSelected(lead)
@@ -241,7 +267,7 @@ export default function DossiersPage() {
                     View
                   </Button>
                   {lead.dossier_url ? (
-                    <Button size="sm" variant="outline" className="gap-1.5" asChild>
+                    <Button size="sm" variant="outline" className="gap-1.5 transition-all duration-200 hover:bg-muted hover:border-primary/30 hover:shadow-sm" asChild>
                       <Link href={lead.dossier_url} target="_blank" rel="noopener noreferrer">
                         <DownloadIcon className="h-3.5 w-3.5" />
                         Download
@@ -251,6 +277,14 @@ export default function DossiersPage() {
                     <Button size="sm" variant="outline" className="gap-1.5" disabled>
                       <DownloadIcon className="h-3.5 w-3.5" />
                       Download
+                    </Button>
+                  )}
+                  {lead.profile_url && (
+                    <Button size="sm" variant="outline" className="gap-1.5 transition-all duration-200 hover:bg-muted hover:border-primary/30 hover:shadow-sm" asChild>
+                      <Link href={toAbsoluteUrl(lead.profile_url) ?? "#"} target="_blank" rel="noopener noreferrer">
+                        <Linkedin className="h-3.5 w-3.5" />
+                        LinkedIn
+                      </Link>
                     </Button>
                   )}
                 </CardContent>
@@ -265,7 +299,7 @@ export default function DossiersPage() {
       </div>
 
       <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent className="overflow-y-auto sm:max-w-lg bg-background text-foreground">
+        <SheetContent side="center" className="overflow-y-auto w-full max-w-xl sm:max-w-2xl bg-background text-foreground">
           {selected && (
             <>
               <SheetHeader className="sr-only">
@@ -293,22 +327,36 @@ export default function DossiersPage() {
                     Contact information
                   </h3>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm">
-                    <div className="flex items-start gap-2">
-                      <Building2Icon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-                      <span>{selected.company ?? "—"}</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <MailIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-                      <span>{selected.email ?? "—"}</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <MapPinIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-                      <span>{selected.location ?? "—"}</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <PhoneIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
-                      <span>{selected.phone ?? "—"}</span>
-                    </div>
+                    {(selected.company ?? "").trim() && (
+                      <div className="flex items-start gap-2">
+                        <Building2Icon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <span>{selected.company}</span>
+                      </div>
+                    )}
+                    {(selected.email ?? "").trim() && (
+                      <div className="flex items-start gap-2">
+                        <MailIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <a href={`mailto:${selected.email}`} className="text-primary hover:underline truncate">{selected.email}</a>
+                      </div>
+                    )}
+                    {(selected.location ?? "").trim() && (
+                      <div className="flex items-start gap-2">
+                        <MapPinIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <span>{selected.location}</span>
+                      </div>
+                    )}
+                    {(selected.phone ?? "").trim() && (
+                      <div className="flex items-start gap-2">
+                        <PhoneIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <a href={`tel:${selected.phone}`} className="text-primary hover:underline">{selected.phone}</a>
+                      </div>
+                    )}
+                    {(selected.campaign_name ?? "").trim() && (
+                      <div className="flex items-start gap-2 sm:col-span-2">
+                        <TargetIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <span>{selected.campaign_name}</span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -401,17 +449,32 @@ export default function DossiersPage() {
                   </div>
                 )}
 
-                {/* Footer: Download Dossier + View Profile */}
+                {/* Footer: View dossier + Download dossier + View profile */}
                 <div className="flex flex-col gap-2 pt-2 border-t">
-                  <Button asChild className="w-full gap-2">
-                    <Link href={selected.dossier_url ?? "#"} target="_blank" rel="noopener noreferrer" download>
+                  {(selected.dossier_url ?? "").trim() ? (
+                    <>
+                      <Button asChild variant="outline" className="w-full gap-2">
+                        <Link href={toAbsoluteUrl(selected.dossier_url)!} target="_blank" rel="noopener noreferrer">
+                          <ExternalLinkIcon className="h-4 w-4" />
+                          View dossier
+                        </Link>
+                      </Button>
+                      <Button asChild className="w-full gap-2">
+                        <Link href={toAbsoluteUrl(selected.dossier_url)!} target="_blank" rel="noopener noreferrer" download>
+                          <DownloadIcon className="h-4 w-4" />
+                          Download dossier
+                        </Link>
+                      </Button>
+                    </>
+                  ) : (
+                    <Button disabled className="w-full gap-2">
                       <DownloadIcon className="h-4 w-4" />
-                      Download dossier
-                    </Link>
-                  </Button>
+                      Download dossier (no file)
+                    </Button>
+                  )}
                   {selected.profile_url && (
                     <Button variant="outline" asChild className="w-full gap-2">
-                      <Link href={selected.profile_url} target="_blank" rel="noopener noreferrer">
+                      <Link href={toAbsoluteUrl(selected.profile_url) ?? "#"} target="_blank" rel="noopener noreferrer">
                         <UserIcon className="h-4 w-4" />
                         View profile
                       </Link>

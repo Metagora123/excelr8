@@ -23,6 +23,7 @@ import { UploadIcon } from "lucide-react"
 export default function FileIngestionPage() {
   const [file, setFile] = React.useState<File | null>(null)
   const [endpoint, setEndpoint] = React.useState<"test" | "prod">("test")
+  const [supabaseProject, setSupabaseProject] = React.useState<"sales2k25" | "prod2k26">("sales2k25")
   const [uploading, setUploading] = React.useState(false)
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
@@ -57,6 +58,7 @@ export default function FileIngestionPage() {
       const formData = new FormData()
       formData.append("data", file)
       formData.append("endpoint", endpoint)
+      formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/ingestion", { method: "POST", body: formData })
       const data = await res.json().catch(() => ({}))
       if (!res.ok) {
@@ -89,6 +91,18 @@ export default function FileIngestionPage() {
             <CardDescription>Drag and drop or click to select. Sent to n8n webhook.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Supabase project</Label>
+              <Select value={supabaseProject} onValueChange={(v) => setSupabaseProject(v as "sales2k25" | "prod2k26")}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="sales2k25">Sales 2k25</SelectItem>
+                  <SelectItem value="prod2k26">Prod 2k26</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
             <div className="space-y-2">
               <Label>Endpoint</Label>
               <Select value={endpoint} onValueChange={(v) => setEndpoint(v as "test" | "prod")}>

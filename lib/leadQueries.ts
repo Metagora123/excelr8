@@ -1,4 +1,5 @@
-import { getSupabase } from "./supabase"
+import { getSupabase, type SupabaseProject } from "./supabase"
+import { getAllCampaigns } from "./campaignQueries"
 
 export type LeadRow = {
   id: string
@@ -23,6 +24,7 @@ export type LeadRow = {
   followers_count?: number | null
   connections_count?: number | null
   created_at?: string | null
+  campaign_name?: string | null
 }
 
 export type Stats = {
@@ -76,14 +78,15 @@ function mapToLeadRow(row: Record<string, unknown>): LeadRow {
     followers_count: parseOptionalNumber(row.followers_count ?? row.followers ?? row.follower_count),
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections ?? row.connection_count),
     created_at: (row.created_at ?? null) as string | null,
+    campaign_name: (row.campaign_name ?? row.campaign_names ?? null) as string | null,
   }
 }
 
 const PAGE_SIZE = 1000
 
 /** Fetch all rows from a table with pagination (Supabase default max is 1000 per request). */
-async function fetchAllFromLeads(): Promise<Record<string, unknown>[]> {
-  const supabase = getSupabase()
+async function fetchAllFromLeads(project: SupabaseProject = "sales2k25"): Promise<Record<string, unknown>[]> {
+  const supabase = getSupabase(project)
   const out: Record<string, unknown>[] = []
   let from = 0
   while (true) {
@@ -101,8 +104,8 @@ async function fetchAllFromLeads(): Promise<Record<string, unknown>[]> {
   return out
 }
 
-export async function getAllLeads(): Promise<LeadRow[]> {
-  const rows = await fetchAllFromLeads()
+export async function getAllLeads(project: SupabaseProject = "sales2k25"): Promise<LeadRow[]> {
+  const rows = await fetchAllFromLeads(project)
   return rows.map(mapToLeadRow)
 }
 
@@ -134,12 +137,13 @@ function mapDossierRow(row: Record<string, unknown>, lead?: LeadRow | null): Lea
     followers_count: parseOptionalNumber(row.followers_count ?? row.followers) ?? lead?.followers_count ?? null,
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections) ?? lead?.connections_count ?? null,
     created_at: (row.created_at ?? null) as string | null,
+    campaign_name: (row.campaign_name ?? row.campaign_names ?? lead?.campaign_name ?? null) as string | null,
   }
 }
 
 /** Dossiers: try `dossiers` table first (paginated), merge with leads when lead_id present; else leads with dossier set */
-export async function getWithDossiers(): Promise<LeadRow[]> {
-  const supabase = getSupabase()
+export async function getWithDossiers(project: SupabaseProject = "sales2k25"): Promise<LeadRow[]> {
+  const supabase = getSupabase(project)
   const dossiersRows: Record<string, unknown>[] = []
   let from = 0
   while (true) {
@@ -158,23 +162,38 @@ export async function getWithDossiers(): Promise<LeadRow[]> {
     const leadIds = [...new Set(dossiersRows.map((r) => String(r.lead_id ?? r.id ?? "")).filter(Boolean))]
     const leadsById = new Map<string, LeadRow>()
     if (leadIds.length > 0) {
-      const allLeads = await getAllLeads()
+      const allLeads = await getAllLeads(project)
       for (const l of allLeads) leadsById.set(l.id, l)
+    }
+    const campaignIds = [...new Set(dossiersRows.map((r) => String(r.campaign_id ?? "")).filter(Boolean))]
+    const campaignIdToName = new Map<string, string>()
+    if (campaignIds.length > 0) {
+      try {
+        const campaigns = await getAllCampaigns(project)
+        for (const c of campaigns) campaignIdToName.set(c.id, c.name ?? c.id)
+      } catch {
+        // ignore
+      }
     }
     return dossiersRows.map((row) => {
       const leadId = String(row.lead_id ?? row.id ?? "")
       const lead = leadId ? leadsById.get(leadId) : null
-      return mapDossierRow(row, lead)
+      const mapped = mapDossierRow(row, lead)
+      if (!(mapped.campaign_name ?? "").trim() && row.campaign_id) {
+        const name = campaignIdToName.get(String(row.campaign_id))
+        if (name) mapped.campaign_name = name
+      }
+      return mapped
     })
   }
-  const all = await getAllLeads()
+  const all = await getAllLeads(project)
   return all.filter(
     (l) => l.is_dossier === true || (l.dossier_url != null && String(l.dossier_url).trim() !== "")
   )
 }
 
-export async function getStats(): Promise<Stats> {
-  const leads = await getAllLeads()
+export async function getStats(project: SupabaseProject = "sales2k25"): Promise<Stats> {
+  const leads = await getAllLeads(project)
   const total = leads.length
   const withDossiers = leads.filter((l) => l.is_dossier === true || (l.dossier_url != null && l.dossier_url !== "")).length
   const byStatusMap = new Map<string, number>()
@@ -204,8 +223,8 @@ export async function getStats(): Promise<Stats> {
 }
 
 /** Cumulative average score over time (by month from created_at) */
-export async function getTimelineData(): Promise<{ date: string; score: number }[]> {
-  const leads = await getAllLeads()
+export async function getTimelineData(project: SupabaseProject = "sales2k25"): Promise<{ date: string; score: number }[]> {
+  const leads = await getAllLeads(project)
   const withScore = leads
     .filter((l) => typeof l.score === "number" && l.created_at)
     .map((l) => ({ score: l.score as number, created_at: l.created_at! }))

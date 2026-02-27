@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server"
 import { getN8nWebhookUrl, getN8nCampaignTestEndpoint, getN8nCampaignProdEndpoint } from "@/lib/env-n8n"
 
+function parseProject(v: string | null): "sales2k25" | "prod2k26" {
+  return v === "prod2k26" ? "prod2k26" : "sales2k25"
+}
+
 export async function POST(req: Request) {
   try {
     const formData = await req.formData()
@@ -10,11 +14,12 @@ export async function POST(req: Request) {
     const category = formData.get("category") as string | null
     const managedBy = formData.get("managedBy") as string | null
     const endpoint = formData.get("endpoint") as string | null // "test" | "prod"
+    const supabaseProject = parseProject(formData.get("supabaseProject") as string | null)
     if (!file) {
       return NextResponse.json({ error: "No CSV file provided" }, { status: 400 })
     }
     const baseUrl = getN8nWebhookUrl()
-    const path = endpoint === "prod" ? getN8nCampaignProdEndpoint() : getN8nCampaignTestEndpoint()
+    const path = endpoint === "prod" ? getN8nCampaignProdEndpoint(supabaseProject) : getN8nCampaignTestEndpoint(supabaseProject)
     const url = `${baseUrl.replace(/\/$/, "")}/${path}`
     if (!baseUrl) {
       return NextResponse.json({ error: "VITE_N8N_WEBHOOK_URL not set" }, { status: 500 })

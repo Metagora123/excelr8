@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
+import { listR2Keys, filterMarkdownKeys } from "@/lib/r2"
 
-/** GET: query ?date=YYYY-MM-DD. Returns list of file names/paths for that date folder.
- *  Replace with R2 list when wired. */
+/** GET: query ?date=YYYY-MM-DD. Returns list of file keys (markdown) for that date from R2. */
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
@@ -9,13 +9,9 @@ export async function GET(req: Request) {
     if (!date) {
       return NextResponse.json([])
     }
-    // Mock: return placeholder filenames for the selected date. Replace with R2 list.
-    const mockFiles = [
-      `${date}-summary.md`,
-      `${date}-highlights.json`,
-      `posts-${date}.csv`,
-    ]
-    return NextResponse.json(mockFiles)
+    const keys = await listR2Keys(date)
+    const markdownKeys = filterMarkdownKeys(keys)
+    return NextResponse.json(markdownKeys)
   } catch (err) {
     console.error("Newsletter files API error:", err)
     return NextResponse.json(

@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server"
 import { getStats, getTimelineData, getAllLeads } from "@/lib/leadQueries"
 
-export async function GET() {
+function parseProject(v: string | null): "sales2k25" | "prod2k26" {
+  return v === "prod2k26" ? "prod2k26" : "sales2k25"
+}
+
+export async function GET(req: Request) {
   try {
+    const { searchParams } = new URL(req.url)
+    const project = parseProject(searchParams.get("project"))
     const [stats, timeline, allLeads] = await Promise.all([
-      getStats(),
-      getTimelineData(),
-      getAllLeads(),
+      getStats(project),
+      getTimelineData(project),
+      getAllLeads(project),
     ])
     const recentLeads = allLeads.slice(0, 10).map((l) => ({
       id: l.id,

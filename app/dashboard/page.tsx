@@ -12,6 +12,7 @@ import { RecentLeadsTable } from "@/components/recent-leads-table"
 import { Separator } from "@/components/ui/separator"
 import { Skeleton } from "@/components/ui/skeleton"
 import { mockStats, mockLeads, mockTimelineData } from "./excelr8-data"
+import { useSupabaseProject } from "@/lib/supabase-project-context"
 
 type DashboardData = {
   stats: {
@@ -26,8 +27,8 @@ type DashboardData = {
   recentLeads: { id: string; name: string; company: string; status: string; tier: string; score: number; dossierUrl: string }[]
 }
 
-async function fetchDashboard(): Promise<DashboardData> {
-  const res = await fetch("/api/dashboard")
+async function fetchDashboard(project: string): Promise<DashboardData> {
+  const res = await fetch(`/api/dashboard?project=${encodeURIComponent(project)}`)
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string; cause?: string }
     const msg = err.error || res.statusText || "Failed to load dashboard"
@@ -40,12 +41,13 @@ export default function DashboardPage() {
   const [data, setData] = React.useState<DashboardData | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
+  const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const next = await fetchDashboard()
+      const next = await fetchDashboard(project)
       setData(next)
     } catch (e) {
       setError(e instanceof Error ? e.message : "Something went wrong")
@@ -53,7 +55,7 @@ export default function DashboardPage() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [project])
 
   React.useEffect(() => {
     load()

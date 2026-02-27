@@ -45,6 +45,14 @@ export function getSupabaseServiceRoleKey(): string {
   ).trim()
 }
 
+/** Prod 2k26 project (excelr8 prod 2k26). */
+export function getSupabaseUrlProd2k26(): string {
+  return (getEnv("SUPABASE_URL_PROD2K26") ?? "").trim()
+}
+export function getSupabaseServiceRoleKeyProd2k26(): string {
+  return (getEnv("SUPABASE_SERVICE_ROLE_KEY_PROD2K26") ?? "").trim()
+}
+
 /** Unipile API key for Post Radar. */
 export function getUnipileApiKey(): string {
   return (
@@ -70,4 +78,21 @@ export function getOpenAiApiKey(): string {
     getEnv("VITE_OPENAI_API_KEY") ??
     ""
   ).trim()
+}
+
+/** Cloudflare R2 (S3-compatible). */
+export function getR2AccountId(): string {
+  return (getEnv("CLOUDFLARE_R2_ACCOUNT_ID") ?? "").trim()
+}
+export function getR2AccessKeyId(): string {
+  return (getEnv("CLOUDFLARE_R2_ACCESS_KEY_ID") ?? "").trim()
+}
+export function getR2SecretAccessKey(): string {
+  return (getEnv("CLOUDFLARE_R2_SECRET_ACCESS_KEY") ?? "").trim()
+}
+export function getR2BucketName(): string {
+  return (getEnv("CLOUDFLARE_R2_BUCKET_NAME") ?? "newsletter").trim()
+}
+export function getR2Endpoint(): string {
+  return (getEnv("CLOUDFLARE_R2_ENDPOINT") ?? "").trim()
 }

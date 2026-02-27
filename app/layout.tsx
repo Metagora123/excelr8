@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono, Nunito_Sans } from "next/font/google";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { ThemeProvider } from "@/components/theme-provider";
+import { SupabaseProjectProvider } from "@/lib/supabase-project-context";
 import "./globals.css";
 
 const nunitoSans = Nunito_Sans({ variable: "--font-sans" });
@@ -30,7 +31,9 @@ export default function RootLayout({
     <html lang="en" className={nunitoSans.variable} suppressHydrationWarning>
       <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <TooltipProvider>{children}</TooltipProvider>
+          <TooltipProvider>
+          <SupabaseProjectProvider>{children}</SupabaseProjectProvider>
+        </TooltipProvider>
         </ThemeProvider>
       </body>
     </html>

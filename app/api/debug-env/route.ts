@@ -3,9 +3,12 @@ import { getSupabaseUrl, getSupabaseServiceRoleKey } from "@/lib/env"
 
 /**
  * GET /api/debug-env — confirm VITE_SUPABASE_* are read on the server.
- * Returns only booleans (no secrets). Use to debug 500 on /api/dashboard.
+ * Returns only booleans (no secrets). Disabled in production.
  */
 export async function GET() {
+  if (process.env.NODE_ENV === "production") {
+    return new NextResponse(null, { status: 404 })
+  }
   const url = getSupabaseUrl()
   const serviceKey = getSupabaseServiceRoleKey()
   const urlSet = url.length > 0
