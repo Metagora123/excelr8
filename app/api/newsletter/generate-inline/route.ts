@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server"
 import OpenAI from "openai"
 import { getOpenAiApiKey } from "@/lib/env"
-import { getR2ObjectBody } from "@/lib/r2"
+import { getR2ObjectBody, putR2Object } from "@/lib/r2"
 import { getToneDetails } from "@/lib/newsletter-tone"
-import { getContentPrompt, getHtmlPrompt, buildImagePrompt } from "@/lib/newsletter-prompts"
+import { getContentPrompt, getHtmlPrompt, buildImagePrompt, NEWSLETTER_LANGUAGES } from "@/lib/newsletter-prompts"
 import {
   formatArticlesForPrompt,
   parseContentResponse,
@@ -50,6 +50,7 @@ export async function POST(req: Request) {
     customHtmlPrompt?: string
     origin?: string
     imageModel?: string
+    language?: string
   }
   try {
     body = await req.json()
@@ -57,8 +58,12 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
   }
 
-  const { date, selectedKeys, tone, customToneText, customImagePrompt, customHtmlPrompt, origin, imageModel } = body
+  const { date, selectedKeys, tone, customToneText, customImagePrompt, customHtmlPrompt, origin, imageModel, language: languageParam } = body
   const selectedImageModel = imageModel === "gpt-image-1" ? "gpt-image-1" : "dall-e-3"
+  const language =
+    languageParam && NEWSLETTER_LANGUAGES.includes(languageParam as (typeof NEWSLETTER_LANGUAGES)[number])
+      ? (languageParam as (typeof NEWSLETTER_LANGUAGES)[number])
+      : "English"
   if (!date || !Array.isArray(selectedKeys) || selectedKeys.length === 0 || !tone) {
     return NextResponse.json(
       { error: "Missing date, selectedKeys, or tone" },
@@ -91,7 +96,7 @@ export async function POST(req: Request) {
         })
 
         const formattedArticles = formatArticlesForPrompt(items)
-        const contentPrompt = getContentPrompt(formattedArticles)
+        const contentPrompt = getContentPrompt(formattedArticles, language)
 
         // --- Content AI ---
         streamLine(controller, {
@@ -232,6 +237,7 @@ export async function POST(req: Request) {
           toneName,
           toneDetails,
           customHtmlPrompt: customHtmlPrompt?.trim() || undefined,
+          language,
         })
 
         streamLine(controller, {
@@ -262,6 +268,7 @@ export async function POST(req: Request) {
           htmlPrompt,
           htmlRaw,
           htmlCleaned,
+          language,
         })
 
         // Save run doc to local folder (project root / newsletter-runs)
@@ -276,6 +283,15 @@ export async function POST(req: Request) {
           fs.writeFileSync(filePath, runDoc, "utf-8")
         } catch {
           // Ignore (e.g. read-only filesystem on Vercel)
+        }
+
+        // Store newsletter and run doc in R2 for this day (overwrites if exists)
+        try {
+          const prefix = `${date}/`
+          await putR2Object(`${prefix}newsletter.html`, htmlCleaned, "text/html")
+          await putR2Object(`${prefix}newsletter-run.md`, runDoc, "text/markdown")
+        } catch {
+          // Ignore (e.g. R2 not configured)
         }
 
         streamLine(controller, { html: htmlCleaned, runDoc, runId })

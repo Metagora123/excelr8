@@ -77,12 +77,16 @@ export function buildRunDoc(params: {
   htmlPrompt: string
   htmlRaw: string
   htmlCleaned: string
+  language?: string
 }): string {
   const d = new Date().toISOString()
   let md = `# Newsletter Run: ${params.runId}\n\n`
   md += `**Generated:** ${d}\n\n`
   md += `## Config\n\n`
   md += `- **Date:** ${params.date}\n`
+  if (params.language) {
+    md += `- **Language:** ${params.language}\n`
+  }
   md += `- **Selected files:** ${params.selectedKeys.length}\n`
   params.selectedKeys.forEach((k) => {
     md += `  - \`${k}\`\n`

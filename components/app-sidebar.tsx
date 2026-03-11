@@ -36,6 +36,8 @@ import {
   Settings2Icon,
   CircleHelpIcon,
   SearchIcon,
+  Share2Icon,
+  ZapIcon,
 } from "lucide-react"
 import { useSupabaseProject } from "@/lib/supabase-project-context"
 
@@ -51,8 +53,10 @@ const data = {
     { title: "Dossiers", url: "/dossiers", icon: <FileTextIcon /> },
     { title: "Post Radar", url: "/radar", icon: <RadarIcon /> },
     { title: "Campaign Manager", url: "/campaign-manager", icon: <TargetIcon /> },
+    { title: "Campaign Automations", url: "/campaign-automations", icon: <ZapIcon /> },
     { title: "KPI Dashboard", url: "/kpi", icon: <BarChart2Icon /> },
     { title: "Newsletter", url: "/newsletter", icon: <MailIcon /> },
+    { title: "HubSpot Export", url: "/hubspot", icon: <Share2Icon /> },
   ],
   navSecondary: [
     { title: "Settings", url: "#", icon: <Settings2Icon /> },

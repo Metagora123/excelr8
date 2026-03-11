@@ -30,8 +30,17 @@ import {
   BarChart3Icon,
   CheckIcon,
   DownloadIcon,
+  FileDownIcon,
+  EyeIcon,
 } from "lucide-react"
 import type { NormalizedPostData, RadarPerson } from "@/app/api/radar/route"
+import {
+  ChartContainer,
+  ChartTooltip,
+  ChartTooltipContent,
+  type ChartConfig,
+} from "@/components/ui/chart"
+import { Bar, BarChart, XAxis, YAxis } from "recharts"
 
 const ICP_STORAGE_KEY = "icpConfig"
 
@@ -120,6 +129,44 @@ function downloadCSV(
   URL.revokeObjectURL(a.href)
 }
 
+/** Campaign Manager–compatible CSV: columns Name, LinkedIn, Title, Reasoning, Score (parseCsvToNormalizedRows recognizes these). */
+function downloadCampaignCSV(
+  rows: { name: string; headline?: string; profile_url?: string; comment?: string; matchScore?: number }[],
+  filename: string
+) {
+  const headers = ["Name", "LinkedIn", "Title", "Reasoning", "Score"]
+  const lines = [headers.map(escapeCSV).join(",")]
+  for (const r of rows) {
+    const cells = [
+      r.name,
+      r.profile_url ?? "",
+      r.headline ?? "",
+      r.comment ?? "",
+      r.matchScore != null ? String(r.matchScore) : "",
+    ]
+    lines.push(cells.map(escapeCSV).join(","))
+  }
+  const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" })
+  const a = document.createElement("a")
+  a.href = URL.createObjectURL(blob)
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(a.href)
+}
+
+/** Dedupe by profile_url (normalized); if no profile_url, by name (lowercase). Keeps first occurrence. */
+function dedupeRadarRows<T extends { name: string; profile_url?: string }>(rows: T[]): T[] {
+  const seen = new Set<string>()
+  return rows.filter((r) => {
+    const url = (r.profile_url ?? "").trim().toLowerCase()
+    const nameKey = (r.name ?? "").trim().toLowerCase()
+    const key = url || nameKey || `noid-${seen.size}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 export default function PostRadarPage() {
   const [postUrl, setPostUrl] = React.useState("")
   const [loading, setLoading] = React.useState(false)
@@ -137,6 +184,7 @@ export default function PostRadarPage() {
   const [batchSize, setBatchSize] = React.useState<"10" | "20" | "50" | "all">("20")
   const [showStatsModal, setShowStatsModal] = React.useState(false)
   const [matchThreshold, setMatchThreshold] = React.useState(50)
+  const [showCampaignPreview, setShowCampaignPreview] = React.useState(false)
 
   React.useEffect(() => {
     try {
@@ -197,6 +245,11 @@ export default function PostRadarPage() {
       const result = data as RadarResult
       setPostData(result.postData)
       setSource(result.source)
+      console.log("[Radar] Client: Search response received", {
+        source: result.source,
+        commentatorsCount: result.postData.commentators?.length ?? 0,
+        reactionersCount: result.postData.reactioners?.length ?? 0,
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed")
     } finally {
@@ -376,7 +429,7 @@ export default function PostRadarPage() {
         matchScore: res?.matchScore,
       }
     })
-    downloadCSV(rows, `radar-commentators-${postId}-${date}.csv`)
+    downloadCSV(dedupeRadarRows(rows), `radar-commentators-${postId}-${date}.csv`)
   }
 
   const handleDownloadReactioners = () => {
@@ -393,7 +446,43 @@ export default function PostRadarPage() {
         matchScore: res?.matchScore,
       }
     })
-    downloadCSV(rows, `radar-reactioners-${postId}-${date}.csv`)
+    downloadCSV(dedupeRadarRows(rows), `radar-reactioners-${postId}-${date}.csv`)
+  }
+
+  /** Build combined, deduped campaign rows (same as download). */
+  const getCampaignPreviewRows = (): { name: string; headline?: string; profile_url?: string; comment?: string; matchScore?: number }[] => {
+    if (!postData) return []
+    const comm = commentatorsToShow.map((p, i) => ({
+      name: p.name,
+      headline: p.headline,
+      profile_url: p.profile_url,
+      comment: p.text ?? "",
+      matchScore: getMatchResult(p, commentStartIndex + i)?.matchScore,
+    }))
+    const react = reactionersToShow.map((p, i) => ({
+      name: p.name,
+      headline: p.headline,
+      profile_url: p.profile_url,
+      comment: "",
+      matchScore: getMatchResult(p, reactStartIndex + i)?.matchScore,
+    }))
+    return dedupeRadarRows([...comm, ...react])
+  }
+
+  /** Export current commentators + reactioners as campaign-compatible CSV (Name, LinkedIn, Title, Reasoning, Score). No duplicates. */
+  const handleDownloadCampaignCSV = () => {
+    if (!postData) return
+    const postId = postData.linkedinPostId ?? "post"
+    const date = new Date().toISOString().slice(0, 10)
+    const rows = getCampaignPreviewRows()
+    console.log("[Radar] Client: Campaign CSV download", {
+      commentatorsIncluded: commentatorsToShow.length,
+      reactionersIncluded: reactionersToShow.length,
+      combinedBeforeDedupe: commentatorsToShow.length + reactionersToShow.length,
+      afterDedupe: rows.length,
+      filename: `radar-campaign-${postId}-${date}.csv`,
+    })
+    downloadCampaignCSV(rows, `radar-campaign-${postId}-${date}.csv`)
   }
 
   const toggleArrayItem = (key: keyof IcpConfig, item: string) => {
@@ -539,9 +628,70 @@ export default function PostRadarPage() {
               </CardContent>
             </Card>
 
+            {/* Stats & engagement charts */}
             <Card>
               <CardHeader>
-                <div className="flex flex-wrap items-center justify-between gap-4">
+                <CardTitle>Engagement & stats</CardTitle>
+                <CardDescription>Commentators vs reactioners and ICP score distribution</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-6">
+                <div className="grid gap-6 sm:grid-cols-2">
+                  <div>
+                    <h4 className="text-sm font-medium text-muted-foreground mb-2">Engagement</h4>
+                    <ChartContainer
+                      config={
+                        {
+                          type: { label: "Type" },
+                          count: { label: "Count", color: "hsl(var(--chart-1))" },
+                        } satisfies ChartConfig
+                      }
+                      className="h-[200px] w-full"
+                    >
+                      <BarChart
+                        data={[
+                          { type: "Commentators", count: (postData.commentators ?? []).length },
+                          { type: "Reactioners", count: (postData.reactioners ?? []).length },
+                        ]}
+                        margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                      >
+                        <XAxis dataKey="type" tickLine={false} axisLine={false} tickMargin={8} />
+                        <YAxis tickLine={false} axisLine={false} tickMargin={8} allowDecimals={false} />
+                        <ChartTooltip content={<ChartTooltipContent />} />
+                        <Bar dataKey="count" fill="var(--chart-1)" radius={[4, 4, 0, 0]} />
+                      </BarChart>
+                    </ChartContainer>
+                  </div>
+                  {stats.distribution.length > 0 && (
+                    <div>
+                      <h4 className="text-sm font-medium text-muted-foreground mb-2">ICP score distribution</h4>
+                      <ChartContainer
+                        config={
+                          {
+                            bucket: { label: "Score range" },
+                            count: { label: "People", color: "hsl(var(--chart-2))" },
+                          } satisfies ChartConfig
+                        }
+                        className="h-[200px] w-full"
+                      >
+                        <BarChart
+                          data={stats.distribution}
+                          margin={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                        >
+                          <XAxis dataKey="bucket" tickLine={false} axisLine={false} tickMargin={8} />
+                          <YAxis tickLine={false} axisLine={false} tickMargin={8} allowDecimals={false} />
+                          <ChartTooltip content={<ChartTooltipContent />} />
+                          <Bar dataKey="count" fill="var(--chart-2)" radius={[4, 4, 0, 0]} />
+                        </BarChart>
+                      </ChartContainer>
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                  <div className="flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <CardTitle>Commentators & Reactioners</CardTitle>
                     <CardDescription>
@@ -551,6 +701,14 @@ export default function PostRadarPage() {
                     </CardDescription>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
+                    <Button variant="outline" size="sm" onClick={() => setShowCampaignPreview(true)}>
+                      <EyeIcon className="mr-2 h-4 w-4" />
+                      Preview campaign CSV
+                    </Button>
+                    <Button variant="default" size="sm" onClick={handleDownloadCampaignCSV}>
+                      <FileDownIcon className="mr-2 h-4 w-4" />
+                      Download as campaign CSV
+                    </Button>
                     <Label htmlFor="threshold" className="text-xs text-muted-foreground">
                       Min score
                     </Label>
@@ -809,6 +967,77 @@ export default function PostRadarPage() {
                   ))}
                 </ul>
               </div>
+            )}
+          </div>
+        </SheetContent>
+      </Sheet>
+
+      {/* Campaign CSV Preview Sheet */}
+      <Sheet open={showCampaignPreview} onOpenChange={setShowCampaignPreview}>
+        <SheetContent side="right" className="overflow-y-auto sm:max-w-2xl">
+          <SheetHeader>
+            <SheetTitle>Campaign CSV preview</SheetTitle>
+            <SheetDescription>
+              Combined commentators + reactioners, deduped by profile URL (or name). This is exactly what will be in the downloaded CSV.
+            </SheetDescription>
+          </SheetHeader>
+          <div className="py-4">
+            {postData ? (
+              (() => {
+                const rows = getCampaignPreviewRows()
+                console.log("[Radar] Client: Campaign preview opened", { rowCount: rows.length })
+                return (
+                  <>
+                    <p className="text-sm text-muted-foreground mb-3">
+                      {rows.length} unique lead{rows.length !== 1 ? "s" : ""} (after dedupe)
+                    </p>
+                    <div className="rounded-md border overflow-x-auto max-h-[70vh] overflow-y-auto">
+                      <table className="w-full text-left text-sm">
+                        <thead className="bg-muted/50 sticky top-0">
+                          <tr>
+                            <th className="p-2 font-medium">Name</th>
+                            <th className="p-2 font-medium">LinkedIn</th>
+                            <th className="p-2 font-medium">Title</th>
+                            <th className="p-2 font-medium">Reasoning</th>
+                            <th className="p-2 font-medium">Score</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r, i) => (
+                            <tr key={i} className="border-t">
+                              <td className="p-2">{r.name}</td>
+                              <td className="p-2 max-w-[180px] truncate" title={r.profile_url ?? ""}>
+                                {r.profile_url ? (
+                                  <a href={r.profile_url} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                                    {r.profile_url}
+                                  </a>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-2 max-w-[200px] truncate" title={r.headline ?? ""}>{r.headline ?? "—"}</td>
+                              <td className="p-2 max-w-[200px] truncate" title={r.comment ?? ""}>{r.comment ?? "—"}</td>
+                              <td className="p-2">{r.matchScore != null ? r.matchScore : "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <Button
+                      className="mt-4"
+                      onClick={() => {
+                        handleDownloadCampaignCSV()
+                        setShowCampaignPreview(false)
+                      }}
+                    >
+                      <FileDownIcon className="mr-2 h-4 w-4" />
+                      Download as campaign CSV
+                    </Button>
+                  </>
+                )
+              })()
+            ) : (
+              <p className="text-muted-foreground text-sm">Load a post first to preview the campaign CSV.</p>
             )}
           </div>
         </SheetContent>

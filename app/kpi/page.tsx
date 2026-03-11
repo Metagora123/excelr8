@@ -30,8 +30,9 @@ import {
   TargetIcon,
   MessageSquareIcon,
   UserPlusIcon,
-  ReplyIcon,
   HeartIcon,
+  SendIcon,
+  UserXIcon,
 } from "lucide-react"
 import { useSupabaseProject } from "@/lib/supabase-project-context"
 
@@ -39,9 +40,11 @@ type KpiTotals = {
   campaigns: number
   messages_sent: number
   invites_sent: number
-  replies_received: number
   comments_made: number
   likes_reactions: number
+  automation_invites_sent: number
+  automation_to_be_messaged: number
+  automation_rejected: number
 }
 
 type CampaignRow = {
@@ -50,15 +53,16 @@ type CampaignRow = {
   status: string | null
   messages_sent: number | null
   invites_sent: number | null
-  replies_received: number | null
   comments_made: number | null
   likes_reactions: number | null
+  automation_invites_sent: number
+  automation_to_be_messaged: number
+  automation_rejected: number
 }
 
 const engagementConfig = {
   messages_sent: { label: "Messages", color: "var(--chart-1)" },
   invites_sent: { label: "Invites", color: "var(--chart-2)" },
-  replies_received: { label: "Replies", color: "var(--chart-3)" },
   comments_made: { label: "Comments", color: "var(--chart-4)" },
   likes_reactions: { label: "Likes", color: "var(--chart-5)" },
 } satisfies ChartConfig
@@ -96,7 +100,7 @@ export default function KPIDashboardPage() {
 
   const maxInvites = Math.max(totals?.invites_sent ?? 1, 1)
   const maxEngagement = Math.max(
-    (totals?.replies_received ?? 0) + (totals?.comments_made ?? 0) + (totals?.likes_reactions ?? 0),
+    (totals?.comments_made ?? 0) + (totals?.likes_reactions ?? 0),
     1
   )
 
@@ -104,7 +108,6 @@ export default function KPIDashboardPage() {
     name: (c.name ?? c.id).slice(0, 20),
     messages: c.messages_sent ?? 0,
     invites: c.invites_sent ?? 0,
-    replies: c.replies_received ?? 0,
     comments: c.comments_made ?? 0,
     likes: c.likes_reactions ?? 0,
   }))
@@ -120,7 +123,10 @@ export default function KPIDashboardPage() {
         <div>
           <h2 className="text-lg font-semibold">Campaign KPI Overview</h2>
           <p className="text-muted-foreground text-sm">
-            All campaigns summary and per-campaign details. Metrics from Supabase campaigns table.
+            All campaigns summary and per-campaign details.
+          </p>
+          <p className="text-muted-foreground text-xs mt-1">
+            <strong>Sources:</strong> <code className="bg-muted px-1 rounded">campaigns</code> (messages, invites, engagement) · <code className="bg-muted px-1 rounded">in_app_campaign_automations</code> (invites, to be messaged, rejected)
           </p>
         </div>
 
@@ -128,14 +134,14 @@ export default function KPIDashboardPage() {
         <section className="space-y-6">
           <h3 className="text-base font-medium">All Campaigns</h3>
           {loading ? (
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
-              {[1, 2, 3, 4, 5].map((i) => (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
+              {[1, 2, 3, 4, 5, 6].map((i) => (
                 <Skeleton key={i} className="h-24 rounded-xl" />
               ))}
             </div>
           ) : totals ? (
             <>
-              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
                 <Card>
                   <CardHeader className="pb-2">
                     <CardDescription>Campaigns</CardDescription>
@@ -143,6 +149,7 @@ export default function KPIDashboardPage() {
                       <TargetIcon className="h-4 w-4" />
                       {totals.campaigns}
                     </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code></p>
                   </CardHeader>
                 </Card>
                 <Card>
@@ -152,6 +159,7 @@ export default function KPIDashboardPage() {
                       <MessageSquareIcon className="h-4 w-4" />
                       {totals.messages_sent.toLocaleString()}
                     </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code></p>
                   </CardHeader>
                 </Card>
                 <Card>
@@ -161,15 +169,33 @@ export default function KPIDashboardPage() {
                       <UserPlusIcon className="h-4 w-4" />
                       {totals.invites_sent.toLocaleString()}
                     </CardTitle>
+                    {totals.automation_invites_sent > 0 ? (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        <code className="bg-muted px-1 rounded">campaigns</code> + <code className="bg-muted px-1 rounded">in_app_campaign_automations</code> (incl. {totals.automation_invites_sent} from automations)
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code></p>
+                    )}
                   </CardHeader>
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>Replies Received</CardDescription>
+                    <CardDescription>To be messaged</CardDescription>
                     <CardTitle className="flex items-center gap-2">
-                      <ReplyIcon className="h-4 w-4" />
-                      {totals.replies_received.toLocaleString()}
+                      <SendIcon className="h-4 w-4" />
+                      {totals.automation_to_be_messaged.toLocaleString()}
                     </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">in_app_campaign_automations</code></p>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Rejected</CardDescription>
+                    <CardTitle className="flex items-center gap-2">
+                      <UserXIcon className="h-4 w-4" />
+                      {totals.automation_rejected.toLocaleString()}
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">in_app_campaign_automations</code></p>
                   </CardHeader>
                 </Card>
                 <Card>
@@ -179,6 +205,7 @@ export default function KPIDashboardPage() {
                       <HeartIcon className="h-4 w-4" />
                       {(totals.comments_made + totals.likes_reactions).toLocaleString()}
                     </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code> (comments + likes)</p>
                   </CardHeader>
                 </Card>
               </div>
@@ -204,14 +231,10 @@ export default function KPIDashboardPage() {
                 </Card>
                 <Card>
                   <CardHeader>
-                    <CardTitle>Engagement & Intent</CardTitle>
-                    <CardDescription>Replies, comments, likes (all campaigns)</CardDescription>
+                    <CardTitle>Engagement</CardTitle>
+                    <CardDescription>Comments and likes (all campaigns)</CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div>
-                      <p className="text-sm text-muted-foreground">Replies</p>
-                      <Progress value={(totals.replies_received / maxEngagement) * 100} className="h-2" />
-                    </div>
                     <div>
                       <p className="text-sm text-muted-foreground">Comments</p>
                       <Progress value={(totals.comments_made / maxEngagement) * 100} className="h-2" />
@@ -238,7 +261,6 @@ export default function KPIDashboardPage() {
                         <ChartTooltip content={<ChartTooltipContent />} />
                         <Bar dataKey="messages" stackId="a" fill="var(--chart-1)" radius={[0, 0, 0, 0]} />
                         <Bar dataKey="invites" stackId="a" fill="var(--chart-2)" radius={[0, 0, 0, 0]} />
-                        <Bar dataKey="replies" stackId="a" fill="var(--chart-3)" radius={[0, 0, 0, 0]} />
                         <Bar dataKey="comments" stackId="a" fill="var(--chart-4)" radius={[0, 0, 0, 0]} />
                         <Bar dataKey="likes" stackId="a" fill="var(--chart-5)" radius={[0, 4, 4, 0]} />
                       </BarChart>
@@ -279,33 +301,49 @@ export default function KPIDashboardPage() {
                   {selectedCampaign.status ? `Status: ${selectedCampaign.status}` : "Single campaign metrics"}
                 </CardDescription>
               </CardHeader>
-              <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+              <CardContent className="grid gap-4 sm:grid-cols-2 lg:grid-cols-6">
                 <div>
                   <p className="text-xs text-muted-foreground">Messages sent</p>
                   <p className="text-lg font-semibold">{(selectedCampaign.messages_sent ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">campaigns</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Invites sent</p>
                   <p className="text-lg font-semibold">{(selectedCampaign.invites_sent ?? 0).toLocaleString()}</p>
+                  {selectedCampaign.automation_invites_sent > 0 ? (
+                    <p className="text-xs text-muted-foreground">campaigns + in_app_campaign_automations</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">campaigns</p>
+                  )}
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">Replies received</p>
-                  <p className="text-lg font-semibold">{(selectedCampaign.replies_received ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">To be messaged</p>
+                  <p className="text-lg font-semibold">{(selectedCampaign.automation_to_be_messaged ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">in_app_campaign_automations</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">Rejected</p>
+                  <p className="text-lg font-semibold">{(selectedCampaign.automation_rejected ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">in_app_campaign_automations</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Comments made</p>
                   <p className="text-lg font-semibold">{(selectedCampaign.comments_made ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">campaigns</p>
                 </div>
                 <div>
                   <p className="text-xs text-muted-foreground">Likes / reactions</p>
                   <p className="text-lg font-semibold">{(selectedCampaign.likes_reactions ?? 0).toLocaleString()}</p>
+                  <p className="text-xs text-muted-foreground">campaigns</p>
                 </div>
               </CardContent>
             </Card>
           )}
         </section>
 
-        <p className="text-muted-foreground text-xs">All metrics from Supabase campaigns table.</p>
+        <p className="text-muted-foreground text-xs">
+          <strong>Tables:</strong> <code className="bg-muted px-1 rounded">campaigns</code> · <code className="bg-muted px-1 rounded">in_app_campaign_automations</code>
+        </p>
       </div>
     </AppShell>
   )

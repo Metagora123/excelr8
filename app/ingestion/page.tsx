@@ -27,6 +27,9 @@ export default function FileIngestionPage() {
   const [uploading, setUploading] = React.useState(false)
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
+  const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [previewLoading, setPreviewLoading] = React.useState(false)
+  const [previewError, setPreviewError] = React.useState<string | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
 
   const handleDrop = (e: React.DragEvent) => {
@@ -45,6 +48,34 @@ export default function FileIngestionPage() {
     const f = e.target.files?.[0]
     if (f) setFile(f)
     setStatus(null)
+    setPreviewLeads([])
+    setPreviewError(null)
+  }
+
+  const handlePreview = async () => {
+    if (!file) return
+    setPreviewLoading(true)
+    setPreviewError(null)
+    setPreviewLeads([])
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
+      const data = (await res.json().catch(() => ({}))) as {
+        leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null }>
+        error?: string
+      }
+      if (!res.ok) {
+        setPreviewError(data.error || res.statusText || "Preview failed")
+        return
+      }
+      const leads = data.leads ?? []
+      setPreviewLeads(leads.slice(0, 50).map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null })))
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : "Preview failed")
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   const handleSubmit = async () => {
@@ -67,6 +98,8 @@ export default function FileIngestionPage() {
       }
       setStatus({ type: "success", message: "Upload sent to n8n successfully." })
       setFile(null)
+      setPreviewLeads([])
+      setPreviewError(null)
       if (inputRef.current) inputRef.current.value = ""
     } catch (e) {
       setStatus({ type: "error", message: e instanceof Error ? e.message : "Upload failed" })
@@ -141,6 +174,50 @@ export default function FileIngestionPage() {
             <Button onClick={handleSubmit} disabled={!file || uploading}>
               {uploading ? "Uploading…" : "Upload"}
             </Button>
+
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!file || previewLoading}
+                onClick={handlePreview}
+              >
+                {previewLoading ? "Loading…" : "Preview cleaned leads"}
+              </Button>
+              <span className="text-xs text-muted-foreground">
+                Uses same parser as Campaign Manager. Shows first 50 rows.
+              </span>
+            </div>
+            {previewError && <p className="text-sm text-destructive">{previewError}</p>}
+            {previewLeads.length > 0 && (
+              <div className="space-y-2 rounded-md border bg-muted/10 p-4">
+                <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
+                <p className="text-xs text-muted-foreground">
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed.
+                </p>
+                <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead className="sticky top-0 bg-muted/80">
+                      <tr>
+                        <th className="text-left p-2 font-medium">Enrich_person</th>
+                        <th className="text-left p-2 font-medium">A Email</th>
+                        <th className="text-left p-2 font-medium">LinkedIn</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewLeads.map((row, i) => (
+                        <tr key={i} className="border-t border-border">
+                          <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
+                          <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
+                          <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
 
             {status && (
               <div

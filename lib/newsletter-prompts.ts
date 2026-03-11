@@ -279,8 +279,26 @@ Your output succeeds when:
 
 **Now, analyze the provided content and generate the complete newsletter package following all requirements above.**`
 
-export function getContentPrompt(formattedArticles: string): string {
-  return CONTENT_PROMPT_PREFIX + formattedArticles + CONTENT_PROMPT_SUFFIX
+const NEWSLETTER_LANGUAGES = ["English", "French", "German", "Spanish"] as const
+export { NEWSLETTER_LANGUAGES }
+export type NewsletterLanguage = (typeof NEWSLETTER_LANGUAGES)[number]
+
+function getContentLanguageBlock(language: string): string {
+  if (!language || language === "English") return ""
+  return `
+
+## Language
+**All output MUST be written in ${language}.** This includes: newsletter_headline, subject_line, pre_header_text, and every field in top_stories (title, summary, reason_for_selection, key_details, why_it_matters, segment_markdown). Do not use any other language.
+
+`
+}
+
+export function getContentPrompt(
+  formattedArticles: string,
+  language?: NewsletterLanguage | string
+): string {
+  const langBlock = getContentLanguageBlock(language ?? "English")
+  return CONTENT_PROMPT_PREFIX + formattedArticles + langBlock + CONTENT_PROMPT_SUFFIX
 }
 
 /** Image generation prompt per story (n8n "Generate an image" node). */
@@ -359,6 +377,8 @@ export function getHtmlPrompt(params: {
   customHtmlPrompt?: string
   /** When set, use this instead of current date (e.g. "{{newsletterDate}}" for placeholder). */
   newsletterDateOverride?: string
+  /** When set and not English, instructs the HTML generator to preserve that language. */
+  language?: string
 }): string {
   const newsletterDate =
     params.newsletterDateOverride !== undefined
@@ -391,6 +411,7 @@ You are an expert HTML Email Designer specializing in creating visually stunning
 
 ## Goal:
 Generate a complete, production-ready HTML newsletter based on the provided content. The newsletter must be visually appealing, professionally designed, and follow email HTML best practices while **strictly adhering to the specified TONE configuration**.
+${params.language && params.language !== "English" ? `\n**Language:** The newsletter content (headline, subject, pre-header, story segments) is in ${params.language}. Output the HTML as-is; do not translate or change the wording.\n` : ""}
 
 ---
 

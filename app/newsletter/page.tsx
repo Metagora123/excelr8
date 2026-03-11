@@ -18,11 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { MailIcon, CopyIcon, CheckIcon, FileTextIcon, DownloadIcon, CheckCircle2Icon, CircleIcon } from "lucide-react"
+import { Checkbox } from "@/components/ui/checkbox"
+import { Badge } from "@/components/ui/badge"
+import { MailIcon, CopyIcon, CheckIcon, FileTextIcon, DownloadIcon, CheckCircle2Icon, CircleIcon, XIcon, SendIcon } from "lucide-react"
 import { TONE_OPTIONS } from "@/lib/newsletter-tone"
 import {
   DEFAULT_IMAGE_PROMPT_PLACEHOLDER,
   DEFAULT_HTML_PROMPT_PLACEHOLDER,
+  NEWSLETTER_LANGUAGES,
 } from "@/lib/newsletter-prompts"
 
 const CHECKPOINTS: { key: string; label: string }[] = [
@@ -42,6 +45,7 @@ export default function NewsletterPage() {
   const [filesLoading, setFilesLoading] = React.useState(false)
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set())
   const [tone, setTone] = React.useState("Professional/No-Nonsense")
+  const [language, setLanguage] = React.useState("English")
   const [customTone, setCustomTone] = React.useState("")
   const [endpoint, setEndpoint] = React.useState<"test" | "prod">("test")
   const [generating, setGenerating] = React.useState(false)
@@ -63,6 +67,15 @@ export default function NewsletterPage() {
   const [copied, setCopied] = React.useState(false)
   const [status, setStatus] = React.useState<string | null>(null)
   const [inlineError, setInlineError] = React.useState<string | null>(null)
+
+  const [archiveStatus, setArchiveStatus] = React.useState<{ hasNewsletter: boolean; hasRunDoc: boolean } | null>(null)
+  const [recipients, setRecipients] = React.useState<string[]>([])
+  const [recipientInput, setRecipientInput] = React.useState("")
+  const [sendRunDoc, setSendRunDoc] = React.useState(false)
+  const [sendHtmlAttachment, setSendHtmlAttachment] = React.useState(false)
+  const [sendHtmlBody, setSendHtmlBody] = React.useState(false)
+  const [sending, setSending] = React.useState(false)
+  const [sendResult, setSendResult] = React.useState<string | null>(null)
 
   const [toneLegacy, setToneLegacy] = React.useState("professional")
   const [customToneLegacy, setCustomToneLegacy] = React.useState("")
@@ -137,6 +150,7 @@ export default function NewsletterPage() {
           customImagePrompt: customImagePrompt.trim() || undefined,
           customHtmlPrompt: customHtmlPrompt.trim() || undefined,
           imageModel,
+          language,
         }),
       })
       if (!res.ok) {
@@ -235,6 +249,16 @@ export default function NewsletterPage() {
           // ignore
         }
       }
+      if (selectedDate) {
+        fetch(`/api/newsletter/archive?date=${encodeURIComponent(selectedDate)}`)
+          .then((r) => (r.ok ? r.json() : null))
+          .then((data: { hasNewsletter?: boolean; hasRunDoc?: boolean } | null) => {
+            if (data && typeof data.hasNewsletter === "boolean" && typeof data.hasRunDoc === "boolean") {
+              setArchiveStatus({ hasNewsletter: data.hasNewsletter, hasRunDoc: data.hasRunDoc })
+            }
+          })
+          .catch(() => {})
+      }
     } catch (e) {
       setInlineError(e instanceof Error ? e.message : "Generate failed")
     } finally {
@@ -294,6 +318,29 @@ export default function NewsletterPage() {
     }
   }, [selectedDate])
 
+  React.useEffect(() => {
+    if (!selectedDate || !/^\d{4}-\d{2}-\d{2}$/.test(selectedDate)) {
+      setArchiveStatus(null)
+      return
+    }
+    let cancelled = false
+    fetch(`/api/newsletter/archive?date=${encodeURIComponent(selectedDate)}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { hasNewsletter?: boolean; hasRunDoc?: boolean } | null) => {
+        if (!cancelled && data && typeof data.hasNewsletter === "boolean" && typeof data.hasRunDoc === "boolean") {
+          setArchiveStatus({ hasNewsletter: data.hasNewsletter, hasRunDoc: data.hasRunDoc })
+        } else if (!cancelled) {
+          setArchiveStatus(null)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setArchiveStatus(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [selectedDate])
+
   const toggleFile = (key: string) => {
     setSelectedKeys((prev) => {
       const next = new Set(prev)
@@ -340,6 +387,87 @@ export default function NewsletterPage() {
     a.download = `newsletter-run-${selectedDate || "export"}-${Date.now()}.md`
     a.click()
     URL.revokeObjectURL(a.href)
+  }
+
+  const downloadArchiveFile = (file: "newsletter.html" | "newsletter-run.md") => {
+    if (!selectedDate) return
+    const url = `/api/newsletter/archive?date=${encodeURIComponent(selectedDate)}&file=${encodeURIComponent(file)}`
+    const a = document.createElement("a")
+    a.href = url
+    a.download = file === "newsletter.html" ? `newsletter-${selectedDate}.html` : `newsletter-run-${selectedDate}.md`
+    a.target = "_blank"
+    a.rel = "noopener noreferrer"
+    a.click()
+  }
+
+  const parseRecipientInput = (value: string) => {
+    const list = value
+      .split(/[\s,;]+/)
+      .map((e) => e.trim().toLowerCase())
+      .filter((e) => e.length > 0)
+    const seen = new Set<string>()
+    return list.filter((e) => {
+      if (seen.has(e)) return false
+      seen.add(e)
+      return true
+    })
+  }
+
+  const addRecipientsFromInput = () => {
+    const next = parseRecipientInput(recipientInput)
+    if (next.length === 0) return
+    setRecipients((prev) => {
+      const set = new Set(prev)
+      next.forEach((e) => set.add(e))
+      return Array.from(set)
+    })
+    setRecipientInput("")
+  }
+
+  const removeRecipient = (email: string) => {
+    setRecipients((prev) => prev.filter((e) => e !== email))
+  }
+
+  const handleSend = async () => {
+    const atLeastOne = sendRunDoc || sendHtmlAttachment || sendHtmlBody
+    if (!atLeastOne || recipients.length === 0) return
+    setSending(true)
+    setSendResult(null)
+    try {
+      let html = generatedHtml
+      let runDocContent = runDoc
+      if ((sendHtmlBody || sendHtmlAttachment) && !html && selectedDate && archiveStatus?.hasNewsletter) {
+        const r = await fetch(`/api/newsletter/archive?date=${encodeURIComponent(selectedDate)}&file=newsletter.html`)
+        if (r.ok) html = await r.text()
+      }
+      if (sendRunDoc && !runDocContent && selectedDate && archiveStatus?.hasRunDoc) {
+        const r = await fetch(`/api/newsletter/archive?date=${encodeURIComponent(selectedDate)}&file=newsletter-run.md`)
+        if (r.ok) runDocContent = await r.text()
+      }
+      const res = await fetch("/api/newsletter/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to: recipients,
+          sendRunDoc,
+          sendHtmlAttachment,
+          sendHtmlBody,
+          html: html || "",
+          runDoc: runDocContent || "",
+          date: selectedDate || "",
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setSendResult(data.error || data.detail || res.statusText || "Send failed")
+        return
+      }
+      setSendResult(`Sent to ${data.sentTo ?? recipients.length} recipient(s).`)
+    } catch (e) {
+      setSendResult(e instanceof Error ? e.message : "Send failed")
+    } finally {
+      setSending(false)
+    }
   }
 
   const copyDefaultImagePrompt = async () => {
@@ -520,6 +648,22 @@ export default function NewsletterPage() {
                   DALL-E 3 for testing; GPT Image 1 for higher-quality newsletter images.
                 </p>
               </div>
+              <div className="space-y-2">
+                <Label>Language</Label>
+                <Select value={language} onValueChange={(v) => setLanguage(v)}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Output language" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {NEWSLETTER_LANGUAGES.map((lang) => (
+                      <SelectItem key={lang} value={lang}>{lang}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Newsletter content (headline, subject, segments) will be generated in this language.
+                </p>
+              </div>
             </div>
 
             {tone === "CUSTOM" && (
@@ -667,6 +811,34 @@ export default function NewsletterPage() {
             )}
           </CardContent>
         </Card>
+
+        {selectedDate && (archiveStatus?.hasNewsletter || archiveStatus?.hasRunDoc) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <CheckCircle2Icon className="h-5 w-5 text-green-600" />
+                Already produced for this day
+              </CardTitle>
+              <CardDescription>
+                Newsletter for {selectedDate} is in the archive. Download below or use the Send section to email.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-2">
+              {archiveStatus.hasNewsletter && (
+                <Button variant="outline" size="sm" onClick={() => downloadArchiveFile("newsletter.html")}>
+                  <DownloadIcon className="h-4 w-4 mr-2" />
+                  Download HTML
+                </Button>
+              )}
+              {archiveStatus.hasRunDoc && (
+                <Button variant="outline" size="sm" onClick={() => downloadArchiveFile("newsletter-run.md")}>
+                  <DownloadIcon className="h-4 w-4 mr-2" />
+                  Download run file (markdown)
+                </Button>
+              )}
+            </CardContent>
+          </Card>
+        )}
 
         {/* Checkpoint data: tone → content prompt → content response → images → html prompt → preview */}
         {toneUsed && (
@@ -838,6 +1010,101 @@ export default function NewsletterPage() {
               </CardContent>
             </Card>
           </>
+        )}
+
+        {selectedDate && (generatedHtml || runDoc || archiveStatus?.hasNewsletter || archiveStatus?.hasRunDoc) && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <SendIcon className="h-5 w-5" />
+                Send newsletter
+              </CardTitle>
+              <CardDescription>
+                Add recipients (paste CSV emails), choose what to send, then click Send.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <Label>Recipients</Label>
+                <div className="flex flex-wrap gap-2">
+                  <input
+                    type="text"
+                    className="flex h-9 flex-1 min-w-[200px] rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder="Paste emails: a@b.com, c@d.com"
+                    value={recipientInput}
+                    onChange={(e) => setRecipientInput(e.target.value)}
+                    onBlur={addRecipientsFromInput}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === ",") {
+                        e.preventDefault()
+                        addRecipientsFromInput()
+                      }
+                    }}
+                  />
+                  <Button type="button" variant="secondary" size="sm" onClick={addRecipientsFromInput}>
+                    Add
+                  </Button>
+                </div>
+                {recipients.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {recipients.map((email) => (
+                      <Badge key={email} variant="secondary" className="pr-1 gap-1">
+                        <span className="max-w-[180px] truncate">{email}</span>
+                        <button
+                          type="button"
+                          aria-label={`Remove ${email}`}
+                          className="rounded hover:bg-muted-foreground/20 p-0.5"
+                          onClick={() => removeRecipient(email)}
+                        >
+                          <XIcon className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <Label>Send options</Label>
+                <div className="flex flex-col gap-2">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={sendRunDoc}
+                      onCheckedChange={(c) => setSendRunDoc(c === true)}
+                    />
+                    <span className="text-sm">Send markdown run file (attachment)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={sendHtmlAttachment}
+                      onCheckedChange={(c) => setSendHtmlAttachment(c === true)}
+                    />
+                    <span className="text-sm">Send newsletter HTML file (attachment)</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <Checkbox
+                      checked={sendHtmlBody}
+                      onCheckedChange={(c) => setSendHtmlBody(c === true)}
+                    />
+                    <span className="text-sm">Send newsletter as HTML (email body)</span>
+                  </label>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button
+                  onClick={handleSend}
+                  disabled={sending || recipients.length === 0 || !(sendRunDoc || sendHtmlAttachment || sendHtmlBody)}
+                >
+                  <SendIcon className="h-4 w-4 mr-2" />
+                  {sending ? "Sending…" : "Send"}
+                </Button>
+                {sendResult && (
+                  <span className={sendResult.startsWith("Sent") ? "text-green-600 text-sm" : "text-destructive text-sm"}>
+                    {sendResult}
+                  </span>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
     </AppShell>

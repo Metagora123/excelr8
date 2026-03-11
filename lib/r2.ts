@@ -2,6 +2,7 @@ import {
   S3Client,
   ListObjectsV2Command,
   GetObjectCommand,
+  PutObjectCommand,
   type _Object,
 } from "@aws-sdk/client-s3"
 import {
@@ -100,4 +101,19 @@ export async function listR2DatePrefixes(): Promise<string[]> {
     .map((p) => p.Prefix?.replace(/\/$/, ""))
     .filter(Boolean) as string[]
   return prefixes.sort((a, b) => (b < a ? -1 : 1))
+}
+
+/**
+ * Upload a string as an object to R2. Key can be e.g. "2026-02-02/newsletter.html".
+ */
+export async function putR2Object(key: string, body: string, contentType?: string): Promise<void> {
+  const client = getR2Client()
+  await client.send(
+    new PutObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Body: Buffer.from(body, "utf-8"),
+      ContentType: contentType ?? (key.endsWith(".md") ? "text/markdown" : "text/html"),
+    })
+  )
 }

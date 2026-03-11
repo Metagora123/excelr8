@@ -33,6 +33,108 @@ export type RadarResult = {
 
 const UNIPILE_BASE = "https://api17.unipile.com:14713/api/v1"
 
+/** Unipile docs: GET /users/{identifier} - identifier can be public_identifier (slug) or provider_id. */
+async function fetchUnipileUserProfile(identifier: string): Promise<{
+  profile_url: string
+  headline?: string
+} | null> {
+  const apiKey = getUnipileApiKey()
+  const accountId = getUnipileAccountId()
+  if (!apiKey || !accountId) return null
+  const encoded = encodeURIComponent(identifier)
+  const url = `${UNIPILE_BASE}/users/${encoded}?account_id=${accountId}`
+  try {
+    const res = await fetch(url, {
+      headers: { "X-API-KEY": apiKey, accept: "application/json" },
+    })
+    if (!res.ok) return null
+    const data = (await res.json()) as Record<string, unknown>
+    const publicId = (data.public_identifier as string) ?? identifier
+    const profileUrl =
+      (data.profile_url as string) ||
+      (publicId && publicId.startsWith("http") ? publicId : `https://www.linkedin.com/in/${publicId}`)
+    const headline = (data.headline as string) || undefined
+    return { profile_url: profileUrl.trim(), headline: headline?.trim() || undefined }
+  } catch {
+    return null
+  }
+}
+
+/** Extract identifier (provider_id or public_identifier) from raw Unipile person object for GET /users/{id}. */
+function getIdentifierFromPerson(person: Record<string, unknown> | null | undefined): string | null {
+  if (!person || typeof person !== "object") return null
+  const v =
+    (person.provider_id as string) ??
+    (person.id as string) ??
+    (person.public_identifier as string) ??
+    (person.linkedin_id as string)
+  if (v != null && String(v).trim()) return String(v).trim()
+  return null
+}
+
+/** Enrich commentators and reactioners missing profile_url by calling Unipile GET /users/{identifier}. */
+async function enrichWithUnipileProfiles(
+  commentators: RadarPerson[],
+  reactioners: RadarPerson[],
+  rawComments: Record<string, unknown>[],
+  rawReactions: Record<string, unknown>[]
+): Promise<void> {
+  const getPersonFromItem = (item: Record<string, unknown>, forComment: boolean): Record<string, unknown> | null => {
+    const candidates = forComment
+      ? [
+          item.creator,
+          item.posted_by,
+          item.comment_author,
+          item.author,
+          item.owner,
+          item.commenter,
+          item.user,
+          item.from,
+          item.member,
+          item.person,
+          item.profile,
+          item.actor,
+        ]
+      : [item.actor, item.owner, item.author, item.user, item.from]
+    for (const c of candidates) {
+      if (c && typeof c === "object") return c as Record<string, unknown>
+    }
+    return null
+  }
+
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  for (let i = 0; i < commentators.length; i++) {
+    if (commentators[i].profile_url?.trim()) continue
+    const raw = rawComments[i]
+    if (!raw) continue
+    const person = getPersonFromItem(raw, true)
+    const id = getIdentifierFromPerson(person)
+    if (!id) continue
+    const profile = await fetchUnipileUserProfile(id)
+    if (profile) {
+      commentators[i].profile_url = profile.profile_url
+      if (profile.headline && !commentators[i].headline) commentators[i].headline = profile.headline
+    }
+    await delay(180)
+  }
+
+  for (let i = 0; i < reactioners.length; i++) {
+    if (reactioners[i].profile_url?.trim()) continue
+    const raw = rawReactions[i]
+    if (!raw) continue
+    const person = getPersonFromItem(raw, false)
+    const id = getIdentifierFromPerson(person)
+    if (!id) continue
+    const profile = await fetchUnipileUserProfile(id)
+    if (profile) {
+      reactioners[i].profile_url = profile.profile_url
+      if (profile.headline && !reactioners[i].headline) reactioners[i].headline = profile.headline
+    }
+    await delay(180)
+  }
+}
+
 function extractPostId(url: string): string | null {
   const patterns = [
     /urn:li:activity:(\d+)/i,
@@ -122,16 +224,31 @@ async function fetchFromUnipile(postId: string): Promise<{
     accept: "application/json",
   }
 
+  console.log("[Radar] Step 1: Fetching from Unipile", { postId, urn, account_id: accountId })
+
   const [postRes, commentsRes, reactionsRes] = await Promise.all([
     fetch(`${baseUrl}?${params}`, { headers }),
     fetch(`${baseUrl}/comments?${params}`, { headers }),
     fetch(`${baseUrl}/reactions?${params}`, { headers }),
   ])
 
-  if (!postRes.ok) return null
+  if (!postRes.ok) {
+    console.log("[Radar] Step 1 failed: post fetch not ok", { status: postRes.status })
+    return null
+  }
   const postData = await postRes.json()
   const comments = commentsRes.ok ? await commentsRes.json() : { items: [] }
   const reactions = reactionsRes.ok ? await reactionsRes.json() : { items: [] }
+
+  const commentsCount = Array.isArray(comments.items) ? comments.items.length : 0
+  const reactionsCount = Array.isArray(reactions.items) ? reactions.items.length : 0
+  console.log("[Radar] Step 2: Unipile responses received", {
+    commentsCount,
+    reactionsCount,
+    commentsItems: comments.items != null ? "present" : "missing",
+    reactionsItems: reactions.items != null ? "present" : "missing",
+  })
+
   return { postData, comments, reactions }
 }
 
@@ -165,9 +282,10 @@ function extractName(obj: Record<string, unknown> | null | undefined): string {
   return "Unknown"
 }
 
-/** Try to get commentator name from comment object top-level keys (many APIs put name here). */
+/** Try to get commentator name from comment object top-level keys (Unipile uses author string; others use author_name, etc.). */
 function extractCommenterNameFromComment(c: Record<string, unknown>): string | null {
   const keys = [
+    "author",
     "commenter_name",
     "author_name",
     "creator_name",
@@ -178,7 +296,6 @@ function extractCommenterNameFromComment(c: Record<string, unknown>): string | n
     "from_name",
     "user_name",
     "commenter",
-    "author",
     "creator",
     "posted_by",
   ]
@@ -226,10 +343,11 @@ function extractProfileUrl(obj: Record<string, unknown> | null | undefined): str
   return `https://www.linkedin.com/in/${s.replace(/^\/+/, "")}`
 }
 
-/** Get the "person" object from a comment or reaction item. Comments often use creator/posted_by/comment_author. */
+/** Get the "person" object from a comment or reaction item. Unipile comments use author_details; fallback to creator/posted_by/etc. */
 function getPersonFromItem(item: Record<string, unknown>, forComment: boolean): Record<string, unknown> {
   const candidates = forComment
     ? [
+        item.author_details,
         item.creator,
         item.posted_by,
         item.comment_author,
@@ -250,7 +368,7 @@ function getPersonFromItem(item: Record<string, unknown>, forComment: boolean): 
         (item.comment as Record<string, unknown> | undefined)?.creator,
         (item.message as Record<string, unknown> | undefined)?.sender,
       ]
-    : [item.actor, item.owner, item.author, item.user, item.from]
+    : [item.actor, item.actor_details, item.owner, item.author, item.user, item.from]
   for (const c of candidates) {
     if (c && typeof c === "object") return c as Record<string, unknown>
   }
@@ -312,6 +430,13 @@ function normalizeUnipileData(
   const commentators = commentList.map((c, i) => toPersonFromComment((c ?? {}) as Record<string, unknown>, i))
   const reactioners = reactionList.map((r, i) => toPersonFromReaction((r ?? {}) as Record<string, unknown>, i))
 
+  console.log("[Radar] Step 3: Normalized commentators & reactioners", {
+    commentatorsCount: commentators.length,
+    reactionersCount: reactioners.length,
+    commentatorsWithProfileUrl: commentators.filter((p) => (p.profile_url ?? "").trim()).length,
+    reactionersWithProfileUrl: reactioners.filter((p) => (p.profile_url ?? "").trim()).length,
+  })
+
   const counters = (postData.counters as Record<string, unknown>) ?? {}
   const reactionsCount = Number(counters.reactions ?? counters.likes ?? reactioners.length) || reactioners.length
   const commentsCount = Number(counters.comments ?? commentators.length) || commentators.length
@@ -335,6 +460,7 @@ export async function POST(req: Request) {
   try {
     const body = await req.json().catch(() => ({}))
     const url = typeof body.url === "string" ? body.url.trim() : ""
+    console.log("[Radar] POST start", { url: url ? `${url.slice(0, 60)}...` : "(empty)" })
     if (!url) {
       return NextResponse.json({ error: "Post URL is required" }, { status: 400 })
     }
@@ -343,6 +469,7 @@ export async function POST(req: Request) {
     }
 
     const postId = extractPostId(url)
+    console.log("[Radar] Extracted postId", { postId })
     if (!postId) {
       return NextResponse.json(
         { error: "Could not extract post ID from URL. Use a direct LinkedIn post link." },
@@ -355,6 +482,7 @@ export async function POST(req: Request) {
 
     const supabaseRow = await searchSupabase(postId)
     if (supabaseRow) {
+      console.log("[Radar] Using Supabase data (skip Unipile)")
       postData = normalizeSupabaseData(supabaseRow)
     } else {
       const unipile = await fetchFromUnipile(postId)
@@ -373,10 +501,42 @@ export async function POST(req: Request) {
         unipile.comments,
         unipile.reactions
       )
+      const rawComments = Array.isArray((unipile.comments as { items?: unknown[] }).items)
+        ? ((unipile.comments as { items: Record<string, unknown>[] }).items)
+        : [] as Record<string, unknown>[]
+      const rawReactions = Array.isArray((unipile.reactions as { items?: unknown[] }).items)
+        ? ((unipile.reactions as { items: Record<string, unknown>[] }).items)
+        : [] as Record<string, unknown>[]
+      const missingCommentators = postData.commentators.filter((p) => !(p.profile_url ?? "").trim()).length
+      const missingReactioners = postData.reactioners.filter((p) => !(p.profile_url ?? "").trim()).length
+      console.log("[Radar] Step 4: Before enrichment", {
+        missingProfileUrlCommentators: missingCommentators,
+        missingProfileUrlReactioners: missingReactioners,
+      })
+      await enrichWithUnipileProfiles(
+        postData.commentators,
+        postData.reactioners,
+        rawComments,
+        rawReactions
+      )
+      const afterCommentatorsWithUrl = postData.commentators.filter((p) => (p.profile_url ?? "").trim()).length
+      const afterReactionersWithUrl = postData.reactioners.filter((p) => (p.profile_url ?? "").trim()).length
+      console.log("[Radar] Step 5: After enrichment", {
+        commentatorsWithProfileUrl: afterCommentatorsWithUrl,
+        reactionersWithProfileUrl: afterReactionersWithUrl,
+      })
     }
 
     // Ensure postUrl is set if we only had postId
     if (!postData.postUrl && url) postData.postUrl = url
+
+    const combinedCount = (postData.commentators?.length ?? 0) + (postData.reactioners?.length ?? 0)
+    console.log("[Radar] Step 6: Final result", {
+      source,
+      commentatorsCount: postData.commentators?.length ?? 0,
+      reactionersCount: postData.reactioners?.length ?? 0,
+      combinedLeadsCount: combinedCount,
+    })
 
     const result: RadarResult = { postData, source }
     return NextResponse.json(result)

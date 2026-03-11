@@ -62,6 +62,11 @@ export function getUnipileApiKey(): string {
   ).trim()
 }
 
+/** Unipile API base URL (e.g. for enrichment: api17.unipile.com:14713). Default from n8n workflow. */
+export function getUnipileApiBase(): string {
+  return (getEnv("UNIPILE_API_BASE") ?? "https://api17.unipile.com:14713").replace(/\/$/, "")
+}
+
 /** Unipile account ID for Post Radar. */
 export function getUnipileAccountId(): string {
   return (
@@ -95,4 +100,71 @@ export function getR2BucketName(): string {
 }
 export function getR2Endpoint(): string {
   return (getEnv("CLOUDFLARE_R2_ENDPOINT") ?? "").trim()
+}
+
+/** HubSpot Private App access token for CRM sync (contacts, deals, associations). */
+export function getHubSpotAccessToken(): string {
+  return (
+    getEnv("HUBSPOT_ACCESS_TOKEN") ??
+    getEnv("HUBSPOT_PRIVATE_APP_ACCESS_TOKEN") ??
+    getEnv("HUBSPOT_PERSONAL_ACCESS_KEY") ??
+    ""
+  ).trim()
+}
+
+/** HubSpot API base URL. Use HUBSPOT_API_BASE or set HUBSPOT_EU=true for EU (api-eu1), or HUBSPOT_NA=true for NA (api-na1). Default api.hubapi.com routes automatically. */
+export function getHubSpotApiBase(): string {
+  const custom = (getEnv("HUBSPOT_API_BASE") ?? "").trim()
+  if (custom) return custom.replace(/\/$/, "")
+  if (getEnv("HUBSPOT_EU") === "true" || getEnv("HUBSPOT_EU") === "1") {
+    return "https://api-eu1.hubapi.com"
+  }
+  if (getEnv("HUBSPOT_NA") === "true" || getEnv("HUBSPOT_NA") === "1") {
+    return "https://api-na1.hubapi.com"
+  }
+  return "https://api.hubapi.com"
+}
+
+/** Airtable PAT for Campaign Manager (create tables, write records). */
+export function getAirtableApiKey(): string {
+  return (getEnv("AIRTABLE_API_KEY") ?? "").trim()
+}
+
+/** Airtable base ID where campaign tables are created. */
+export function getAirtableBaseId(): string {
+  return (getEnv("AIRTABLE_BASE_ID") ?? "").trim()
+}
+
+/** Optional: template table ID to clone schema for Auto Like / Comment table (same base). */
+export function getAirtableTemplateAutoLikeTableId(): string {
+  return (getEnv("AIRTABLE_TEMPLATE_AUTO_LIKE_TABLE_ID") ?? "").trim()
+}
+
+/** Optional: template table ID to clone schema for Hitlist table (same base). */
+export function getAirtableTemplateHitlistTableId(): string {
+  return (getEnv("AIRTABLE_TEMPLATE_HITLIST_TABLE_ID") ?? "").trim()
+}
+
+/** n8n REST API for duplicating workflows (Campaign Manager in-app). */
+export function getN8nApiUrl(): string {
+  return (getEnv("N8N_API_URL") ?? getEnv("N8N_WEBHOOK_URL") ?? "").replace(/\/$/, "")
+}
+export function getN8nApiKey(): string {
+  return (getEnv("N8N_API_KEY") ?? "").trim()
+}
+export function getN8nAutoLikeWorkflowId(): string {
+  return (getEnv("N8N_AUTO_LIKE_WORKFLOW_ID") ?? "").trim()
+}
+export function getN8nHitlistWorkflowId(): string {
+  return (getEnv("N8N_HITLIST_WORKFLOW_ID") ?? "").trim()
+}
+/** SendGrid for newsletter email. */
+export function getSendGridApiKey(): string {
+  return (getEnv("SENDGRID_API_KEY") ?? "").trim()
+}
+export function getSendGridFromEmail(): string {
+  return (getEnv("SENDGRID_FROM_EMAIL") ?? "info@excelr8today.com").trim()
+}
+export function getSendGridFromName(): string {
+  return (getEnv("SENDGRID_FROM_NAME") ?? "Newsletter").trim()
 }

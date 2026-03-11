@@ -126,7 +126,7 @@ function mapDossierRow(row: Record<string, unknown>, lead?: LeadRow | null): Lea
     tier: tier && String(tier).trim() ? tier : null,
     score,
     is_dossier: true,
-    dossier_url: (row.dossier_url ?? row.url ?? row.link ?? row.dossier_link ?? null) as string | null,
+    dossier_url: (row.dossier_url ?? row.url ?? row.link ?? row.dossier_link ?? lead?.dossier_url ?? null) as string | null,
     profile_url: (row.profile_url ?? row.linkedin_url ?? lead?.profile_url ?? null) as string | null,
     profile_picture_url: (row.profile_picture_url ?? row.avatar_url ?? lead?.profile_picture_url ?? null) as string | null,
     about_summary: (row.about_summary ?? row.about ?? lead?.about_summary ?? null) as string | null,

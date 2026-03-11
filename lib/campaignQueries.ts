@@ -18,9 +18,20 @@ export type KpiTotals = {
   campaigns: number
   messages_sent: number
   invites_sent: number
-  replies_received: number
   comments_made: number
   likes_reactions: number
+  /** From in_app_campaign_automations */
+  automation_invites_sent: number
+  automation_to_be_messaged: number
+  automation_rejected: number
+}
+
+export type LeadCampaignRow = {
+  lead_id: string
+  campaign_id: string
+  client_id: string
+  status: string | null
+  joined_at: string
 }
 
 export async function getClients(project: SupabaseProject = "sales2k25"): Promise<ClientRow[]> {
@@ -33,7 +44,34 @@ export async function getClients(project: SupabaseProject = "sales2k25"): Promis
   return (data ?? []) as ClientRow[]
 }
 
-export async function getAllCampaigns(project: SupabaseProject = "sales2k25"): Promise<CampaignRow[]> {
+export type UnipileAccountRow = { id: string; username: string }
+
+export async function getUnipileAccounts(
+  project: SupabaseProject = "sales2k25"
+): Promise<UnipileAccountRow[]> {
+  const supabase = getSupabase(project)
+  const { data, error } = await supabase
+    .from("unipile_accounts")
+    .select("id, username")
+    .order("username")
+  if (error) throw error
+  return (data ?? []) as UnipileAccountRow[]
+}
+
+export async function getLeadCampaigns(
+  project: SupabaseProject = "sales2k25"
+): Promise<LeadCampaignRow[]> {
+  const supabase = getSupabase(project)
+  const { data, error } = await supabase
+    .from("lead_campaigns")
+    .select("lead_id, campaign_id, client_id, status, joined_at")
+  if (error) throw error
+  return (data ?? []) as LeadCampaignRow[]
+}
+
+export async function getAllCampaigns(
+  project: SupabaseProject = "sales2k25"
+): Promise<CampaignRow[]> {
   const supabase = getSupabase(project)
   const { data, error } = await supabase
     .from("campaigns")
@@ -49,14 +87,15 @@ export async function getKpiTotals(project: SupabaseProject = "sales2k25"): Prom
     campaigns: campaigns.length,
     messages_sent: 0,
     invites_sent: 0,
-    replies_received: 0,
     comments_made: 0,
     likes_reactions: 0,
+    automation_invites_sent: 0,
+    automation_to_be_messaged: 0,
+    automation_rejected: 0,
   }
   for (const c of campaigns) {
     totals.messages_sent += c.messages_sent ?? 0
     totals.invites_sent += c.invites_sent ?? 0
-    totals.replies_received += c.replies_received ?? 0
     totals.comments_made += c.comments_made ?? 0
     totals.likes_reactions += c.likes_reactions ?? 0
   }

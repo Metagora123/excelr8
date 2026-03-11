@@ -19,7 +19,38 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { TargetIcon, UploadIcon } from "lucide-react"
+import { TargetIcon, UploadIcon, CheckCircle2Icon, CircleIcon, Trash2Icon } from "lucide-react"
+
+const AUTO_LIKE_BUTTON_FORMULA = `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-unipile"
+& "?post_id=" & {post_id}
+
+& "&record_id=" & RECORD_ID()
+& "&comment_a=" & ENCODE_URL_COMPONENT({comment_a})
+& "&comment_b=" & ENCODE_URL_COMPONENT({comment_b})
+& "&comment_c=" & ENCODE_URL_COMPONENT({comment_c})
+& "&comment_d=" & ENCODE_URL_COMPONENT({comment_d})
+& "&confirm=" & ENCODE_URL_COMPONENT({Confirm_Column})
+& "&reaction=" & ENCODE_URL_COMPONENT({Reaction})
+& "&custom_comment=" & ENCODE_URL_COMPONENT({Custom_Comment_Data})
+& "&poster=" & ENCODE_URL_COMPONENT({Select_Poster})
+& "&final_comment=" & ENCODE_URL_COMPONENT({Final_Comment})
+& "&lead_profile=" & ENCODE_URL_COMPONENT({lead_profile})
+& "&lead_name=" & ENCODE_URL_COMPONENT({lead_name})`
+
+const HITLIST_BUTTON_FORMULA = `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-unipile"`
+
+const INLINE_CHECKPOINTS: { key: string; label: string }[] = [
+  { key: "campaign_created", label: "Campaign row created" },
+  { key: "leads_parsed", label: "CSV parsed" },
+  { key: "leads_upserted", label: "Leads upserted" },
+  { key: "lead_campaigns_filled", label: "Lead–campaign links filled" },
+  { key: "leads_enriched", label: "Leads enriched (profile + posts)" },
+  { key: "airtable_auto_like_table_created", label: "Airtable Auto Like table created" },
+  { key: "airtable_hitlist_table_created", label: "Airtable Hitlist table created" },
+  { key: "n8n_auto_like_workflow_duplicated", label: "n8n Auto Like workflow duplicated" },
+  { key: "n8n_hitlist_workflow_duplicated", label: "n8n Hitlist workflow duplicated" },
+  { key: "completed", label: "Done" },
+]
 
 export default function CampaignManagerPage() {
   const [campaignName, setCampaignName] = React.useState("")
@@ -32,7 +63,57 @@ export default function CampaignManagerPage() {
   const [loading, setLoading] = React.useState(false)
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [clients, setClients] = React.useState<{ id: string; name: string | null }[]>([])
+  const [managedByOptions, setManagedByOptions] = React.useState<{ id: string; username: string }[]>([])
   const inputRef = React.useRef<HTMLInputElement>(null)
+
+  // In-app flow state
+  const [inlineLoading, setInlineLoading] = React.useState(false)
+  const [inlineCheckpoints, setInlineCheckpoints] = React.useState<Record<string, boolean>>({})
+  const [inlineError, setInlineError] = React.useState<string | null>(null)
+  const [enableAutoLike, setEnableAutoLike] = React.useState(true)
+  const [enableHitlist, setEnableHitlist] = React.useState(true)
+  const [enableAutoLikeWorkflow, setEnableAutoLikeWorkflow] = React.useState(true)
+  const [enableHitlistWorkflow, setEnableHitlistWorkflow] = React.useState(true)
+  const [enableCampaignAutomation, setEnableCampaignAutomation] = React.useState(false)
+  const [inlineResult, setInlineResult] = React.useState<{
+    campaignId?: string
+    airtableHitlistUrl?: string
+    airtableAutoLikeUrl?: string
+    n8nHitlistWorkflowUrl?: string
+    n8nAutoLikeWorkflowUrl?: string
+    leadsCount?: number
+    airtableUrlsSaved?: boolean
+    enrichmentSummary?: {
+      enrichedCount: number
+      failedCount: number
+      skipCount: number
+      logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>
+    }
+  } | null>(null)
+  const [enrichmentLogs, setEnrichmentLogs] = React.useState<Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>>([])
+  const [rollback, setRollback] = React.useState<{
+    airtableBaseId?: string
+    airtableHitlistTableId?: string
+    airtableAutoLikeTableId?: string
+    n8nAutoLikeWorkflowId?: string
+    n8nHitlistWorkflowId?: string
+  } | null>(null)
+  const [rollbackLoading, setRollbackLoading] = React.useState(false)
+  const [rollbackMessage, setRollbackMessage] = React.useState<{ type: "success" | "error"; text: string } | null>(null)
+  const [hitlistSchema, setHitlistSchema] = React.useState<{
+    schemaSource: "airtable" | "static"
+    schemaError?: string
+    fields: Array<{ name: string; type: string }>
+  } | null>(null)
+  const [autoLikeSchema, setAutoLikeSchema] = React.useState<{
+    schemaSource: "airtable" | "static"
+    schemaError?: string
+    fields: Array<{ name: string; type: string }>
+  } | null>(null)
+  const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [previewLoading, setPreviewLoading] = React.useState(false)
+  const [previewError, setPreviewError] = React.useState<string | null>(null)
+  const inlineInputRef = React.useRef<HTMLInputElement>(null)
 
   const loadClients = React.useCallback(async () => {
     try {
@@ -44,13 +125,49 @@ export default function CampaignManagerPage() {
     }
   }, [supabaseProject])
 
+  const loadManagedBy = React.useCallback(async () => {
+    try {
+      const res = await fetch(`/api/campaigns/managed-by?project=${encodeURIComponent(supabaseProject)}`)
+      if (res.ok) setManagedByOptions(await res.json())
+      else setManagedByOptions([])
+    } catch {
+      setManagedByOptions([])
+    }
+  }, [supabaseProject])
+
   React.useEffect(() => {
     loadClients()
-  }, [loadClients])
+    loadManagedBy()
+  }, [loadClients, loadManagedBy])
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     setFile(f ?? null)
+    setPreviewLeads([])
+    setPreviewError(null)
+  }
+
+  const handlePreview = async () => {
+    if (!file) return
+    setPreviewLoading(true)
+    setPreviewError(null)
+    setPreviewLeads([])
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
+      const data = (await res.json().catch(() => ({}))) as { leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null }>; error?: string }
+      if (!res.ok) {
+        setPreviewError(data.error || res.statusText || "Preview failed")
+        return
+      }
+      const leads = data.leads ?? []
+      setPreviewLeads(leads.slice(0, 50).map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null })))
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : "Preview failed")
+    } finally {
+      setPreviewLoading(false)
+    }
   }
 
   const handleSubmit = async () => {
@@ -88,19 +205,199 @@ export default function CampaignManagerPage() {
     }
   }
 
+  const handleCreateInApp = async () => {
+    if (!file) {
+      setInlineError("Select a CSV file.")
+      return
+    }
+    if (!clientId) {
+      setInlineError("Select a client.")
+      return
+    }
+    setInlineLoading(true)
+    setInlineError(null)
+    setInlineCheckpoints({})
+    setInlineResult(null)
+    setHitlistSchema(null)
+    setAutoLikeSchema(null)
+    setRollback(null)
+    setRollbackMessage(null)
+    setEnrichmentLogs([])
+    try {
+      const formData = new FormData()
+      formData.append("file", file)
+      formData.append("campaignName", campaignName)
+      formData.append("clientId", clientId)
+      formData.append("category", category)
+      formData.append("managedBy", managedBy)
+      formData.append("supabaseProject", supabaseProject)
+      formData.append("enableAutoLike", String(enableAutoLike))
+      formData.append("enableHitlist", String(enableHitlist))
+      formData.append("enableAutoLikeWorkflow", String(enableAutoLikeWorkflow))
+      formData.append("enableHitlistWorkflow", String(enableHitlistWorkflow))
+      formData.append("enableCampaignAutomation", String(enableCampaignAutomation))
+      const res = await fetch("/api/campaign-manager/inline", { method: "POST", body: formData })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setInlineError(data.error || res.statusText || "Request failed")
+        return
+      }
+      const reader = res.body?.getReader()
+      const decoder = new TextDecoder()
+      if (!reader) {
+        setInlineError("No response body")
+        return
+      }
+      let buffer = ""
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const obj = JSON.parse(line) as Record<string, unknown>
+            if (typeof obj.checkpoint === "string") {
+              setInlineCheckpoints((prev) => ({ ...prev, [obj.checkpoint]: true }))
+            }
+            if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
+              setAutoLikeSchema({
+                schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+                schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+                fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
+              })
+            }
+            if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
+              setHitlistSchema({
+                schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+                schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+                fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
+              })
+            }
+            if (obj.error != null) {
+              setInlineError(String(obj.error) + (obj.detail ? `: ${obj.detail}` : ""))
+            }
+            if (obj.campaignId != null) {
+              setInlineResult((prev) => ({
+                ...prev,
+                campaignId: String(obj.campaignId),
+                airtableHitlistUrl: obj.airtableHitlistUrl != null ? String(obj.airtableHitlistUrl) : undefined,
+                airtableAutoLikeUrl: obj.airtableAutoLikeUrl != null ? String(obj.airtableAutoLikeUrl) : undefined,
+                n8nHitlistWorkflowUrl: obj.n8nHitlistWorkflowUrl != null ? String(obj.n8nHitlistWorkflowUrl) : undefined,
+                n8nAutoLikeWorkflowUrl: obj.n8nAutoLikeWorkflowUrl != null ? String(obj.n8nAutoLikeWorkflowUrl) : undefined,
+                leadsCount: typeof obj.leadsCount === "number" ? obj.leadsCount : undefined,
+              airtableUrlsSaved:
+                obj.airtableUrlsSaved === true ? true : prev?.airtableUrlsSaved,
+                enrichmentSummary:
+                  obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
+                    ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
+                    : prev?.enrichmentSummary,
+              }))
+            }
+            if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
+              const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
+              setEnrichmentLogs((prev) => [...prev, { type: e.type ?? "skip", profile_url: e.profile_url ?? "", full_name: e.full_name ?? null, message: e.message ?? "", postsStored: e.postsStored }])
+            }
+            if (obj.enrichment_summary != null && typeof obj.enrichment_summary === "object") {
+              const s = obj.enrichment_summary as { enrichedCount?: number; failedCount?: number; skipCount?: number; logs?: unknown[] }
+              setInlineResult((prev) => prev ? { ...prev, enrichmentSummary: { enrichedCount: s.enrichedCount ?? 0, failedCount: s.failedCount ?? 0, skipCount: s.skipCount ?? 0, logs: Array.isArray(s.logs) ? s.logs as Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> : [] } } : null)
+            }
+            if (obj.checkpoint === "completed" && obj.rollback && typeof obj.rollback === "object") {
+              const r = obj.rollback as Record<string, unknown>
+              setRollback({
+                airtableBaseId: r.airtableBaseId != null ? String(r.airtableBaseId) : undefined,
+                airtableHitlistTableId: r.airtableHitlistTableId != null ? String(r.airtableHitlistTableId) : undefined,
+                airtableAutoLikeTableId: r.airtableAutoLikeTableId != null ? String(r.airtableAutoLikeTableId) : undefined,
+                n8nAutoLikeWorkflowId: r.n8nAutoLikeWorkflowId != null ? String(r.n8nAutoLikeWorkflowId) : undefined,
+                n8nHitlistWorkflowId: r.n8nHitlistWorkflowId != null ? String(r.n8nHitlistWorkflowId) : undefined,
+              })
+            }
+          } catch {
+            // skip malformed line
+          }
+        }
+      }
+      if (buffer.trim()) {
+        try {
+          const obj = JSON.parse(buffer) as Record<string, unknown>
+          if (typeof obj.checkpoint === "string") {
+            setInlineCheckpoints((prev) => ({ ...prev, [obj.checkpoint]: true }))
+          }
+          if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
+            setAutoLikeSchema({
+              schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+              schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+              fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
+            })
+          }
+          if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
+            setHitlistSchema({
+              schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+              schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+              fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
+            })
+          }
+          if (obj.error != null) setInlineError(String(obj.error))
+          if (obj.campaignId != null) {
+            setInlineResult((prev) => ({
+              ...prev,
+              campaignId: String(obj.campaignId),
+              airtableHitlistUrl: obj.airtableHitlistUrl != null ? String(obj.airtableHitlistUrl) : undefined,
+              airtableAutoLikeUrl: obj.airtableAutoLikeUrl != null ? String(obj.airtableAutoLikeUrl) : undefined,
+              n8nHitlistWorkflowUrl: obj.n8nHitlistWorkflowUrl != null ? String(obj.n8nHitlistWorkflowUrl) : undefined,
+              n8nAutoLikeWorkflowUrl: obj.n8nAutoLikeWorkflowUrl != null ? String(obj.n8nAutoLikeWorkflowUrl) : undefined,
+              leadsCount: typeof obj.leadsCount === "number" ? obj.leadsCount : undefined,
+              airtableUrlsSaved: obj.airtableUrlsSaved === true ? true : prev?.airtableUrlsSaved,
+              enrichmentSummary:
+                obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
+                  ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
+                  : prev?.enrichmentSummary,
+            }))
+          }
+          if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
+            const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
+            setEnrichmentLogs((prev) => [...prev, { type: e.type ?? "skip", profile_url: e.profile_url ?? "", full_name: e.full_name ?? null, message: e.message ?? "", postsStored: e.postsStored }])
+          }
+          if (obj.enrichment_summary != null && typeof obj.enrichment_summary === "object") {
+            const s = obj.enrichment_summary as { enrichedCount?: number; failedCount?: number; skipCount?: number; logs?: unknown[] }
+            setInlineResult((prev) => prev ? { ...prev, enrichmentSummary: { enrichedCount: s.enrichedCount ?? 0, failedCount: s.failedCount ?? 0, skipCount: s.skipCount ?? 0, logs: Array.isArray(s.logs) ? (s.logs as Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>) : [] } } : null)
+          }
+          if (obj.checkpoint === "completed" && obj.rollback && typeof obj.rollback === "object") {
+            const r = obj.rollback as Record<string, unknown>
+            setRollback({
+              airtableBaseId: r.airtableBaseId != null ? String(r.airtableBaseId) : undefined,
+              airtableHitlistTableId: r.airtableHitlistTableId != null ? String(r.airtableHitlistTableId) : undefined,
+              airtableAutoLikeTableId: r.airtableAutoLikeTableId != null ? String(r.airtableAutoLikeTableId) : undefined,
+              n8nAutoLikeWorkflowId: r.n8nAutoLikeWorkflowId != null ? String(r.n8nAutoLikeWorkflowId) : undefined,
+              n8nHitlistWorkflowId: r.n8nHitlistWorkflowId != null ? String(r.n8nHitlistWorkflowId) : undefined,
+            })
+          }
+        } catch {
+          // ignore
+        }
+      }
+    } catch (e) {
+      setInlineError(e instanceof Error ? e.message : "Request failed")
+    } finally {
+      setInlineLoading(false)
+    }
+  }
+
   return (
     <AppShell title="Campaign Manager">
       <div className="px-4 lg:px-6 space-y-6">
         <div>
           <h2 className="text-lg font-semibold">Campaign Manager</h2>
           <p className="text-muted-foreground text-sm">
-            Create campaign: client, category, managed by, and CSV upload to n8n.
+            Create campaign: client, category, managed by, and CSV. Send to n8n (first card) or run in-app with Supabase, Airtable, and n8n workflows (second card).
           </p>
         </div>
 
         <Card>
           <CardHeader>
-            <CardTitle>New Campaign</CardTitle>
+            <CardTitle>New Campaign (n8n)</CardTitle>
             <CardDescription>Fill in details and upload CSV. Sends to n8n webhook.</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -163,10 +460,11 @@ export default function CampaignManagerPage() {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="_">—</SelectItem>
-                    <SelectItem value="Yves (Sales, CEO, CTOs)">Yves (Sales, CEO, CTOs)</SelectItem>
-                    <SelectItem value="Eva (Marketing)">Eva (Marketing)</SelectItem>
-                    <SelectItem value="Shawn (Technical)">Shawn (Technical)</SelectItem>
-                    <SelectItem value="Other">Other</SelectItem>
+                    {managedByOptions.map((a) => (
+                      <SelectItem key={a.id} value={a.username}>
+                        {a.username}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
               </div>
@@ -219,6 +517,483 @@ export default function CampaignManagerPage() {
                 {status.message}
               </div>
             )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Create Campaign In-App</CardTitle>
+            <CardDescription>
+              Use the form above (Supabase project, campaign name, client, category, managed by, CSV). Creates campaign in Supabase, upserts leads, fills lead–campaign links, creates Airtable tables, and duplicates n8n workflows. Checkpoints update as each step completes.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="flex flex-wrap gap-6">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableAutoLike}
+                  onChange={(e) => setEnableAutoLike(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm font-medium">Auto Like / Auto Comment</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableHitlist}
+                  onChange={(e) => setEnableHitlist(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm font-medium">Hitlist (invites / messages)</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableAutoLikeWorkflow}
+                  onChange={(e) => setEnableAutoLikeWorkflow(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm font-medium">Auto Like / Auto Comment n8n workflow</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableHitlistWorkflow}
+                  onChange={(e) => setEnableHitlistWorkflow(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm font-medium">Hitlist n8n workflow</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableCampaignAutomation}
+                  onChange={(e) => setEnableCampaignAutomation(e.target.checked)}
+                  className="h-4 w-4 rounded border-input"
+                />
+                <span className="text-sm font-medium">Campaign automation (in-app hitlist)</span>
+              </label>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={!file || previewLoading}
+                onClick={handlePreview}
+              >
+                {previewLoading ? "Loading…" : "Preview cleaned leads"}
+              </Button>
+              <span className="text-xs text-muted-foreground">Uses same CSV as above. Shows parser & cleaner result (first 50 rows).</span>
+            </div>
+            {previewError && <p className="text-sm text-destructive">{previewError}</p>}
+            {previewLeads.length > 0 && (
+              <div className="space-y-2 rounded-md border bg-muted/10 p-4">
+                <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
+                <p className="text-xs text-muted-foreground">Bullets (•), hyphens (-), and leading dots removed; spaces collapsed.</p>
+                <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
+                  <table className="w-full text-xs border-collapse">
+                    <thead className="sticky top-0 bg-muted/80">
+                      <tr>
+                        <th className="text-left p-2 font-medium">Enrich_person</th>
+                        <th className="text-left p-2 font-medium">A Email</th>
+                        <th className="text-left p-2 font-medium">LinkedIn</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewLeads.map((row, i) => (
+                        <tr key={i} className="border-t border-border">
+                          <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
+                          <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
+                          <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label>Checkpoints</Label>
+              <ul className="rounded-md border bg-muted/30 divide-y divide-border p-2">
+                {INLINE_CHECKPOINTS.map(({ key, label }) => (
+                  <li key={key} className="flex items-center gap-2 py-1.5 text-sm">
+                    {inlineCheckpoints[key] ? (
+                      <CheckCircle2Icon className="h-4 w-4 shrink-0 text-green-600" />
+                    ) : (
+                      <CircleIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    )}
+                    <span className={inlineCheckpoints[key] ? "font-medium" : "text-muted-foreground"}>
+                      {label} {inlineCheckpoints[key] ? "✓" : ""}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <Button
+              onClick={handleCreateInApp}
+              disabled={inlineLoading || !file || !clientId}
+            >
+              <TargetIcon className="mr-2 h-4 w-4" />
+              {inlineLoading ? "Creating…" : "Create Campaign In-App"}
+            </Button>
+            {inlineError && (
+              <p className="text-sm text-destructive">{inlineError}</p>
+            )}
+            {inlineResult?.campaignId && (
+              <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3 text-sm space-y-2">
+                <p className="font-medium">Campaign created</p>
+                <p>ID: <code className="bg-muted px-1 rounded">{inlineResult.campaignId}</code></p>
+                {inlineResult.leadsCount != null && (
+                  <p>Leads: {inlineResult.leadsCount}</p>
+                )}
+                {(inlineResult.enrichmentSummary || enrichmentLogs.length > 0) && (
+                  <div className="rounded border border-border/50 bg-muted/20 p-2 space-y-1">
+                    <p className="font-medium text-muted-foreground">Enrichment</p>
+                    {inlineResult.enrichmentSummary ? (
+                      <>
+                        <p className="text-xs">
+                          <span className="text-green-600 dark:text-green-400">{inlineResult.enrichmentSummary.enrichedCount} enriched</span>
+                          {inlineResult.enrichmentSummary.failedCount > 0 && (
+                            <span className="text-destructive ml-2">{inlineResult.enrichmentSummary.failedCount} failed</span>
+                          )}
+                          {inlineResult.enrichmentSummary.skipCount > 0 && (
+                            <span className="text-muted-foreground ml-2">{inlineResult.enrichmentSummary.skipCount} skipped</span>
+                          )}
+                        </p>
+                        {inlineResult.enrichmentSummary.logs.length > 0 && (
+                          <details className="text-xs mt-1">
+                            <summary className="cursor-pointer text-muted-foreground">View logs ({inlineResult.enrichmentSummary.logs.length})</summary>
+                            <ul className="mt-1 max-h-40 overflow-y-auto space-y-0.5 list-none pl-0">
+                              {inlineResult.enrichmentSummary.logs.map((log, i) => (
+                                <li key={i} className="flex flex-wrap gap-x-2 gap-y-0">
+                                  <span className={`shrink-0 font-mono ${log.type === "enriched" ? "text-green-600 dark:text-green-400" : log.type === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
+                                    [{log.type}]
+                                  </span>
+                                  <span className="truncate" title={log.full_name ?? log.profile_url}>{log.full_name || log.profile_url || "—"}</span>
+                                  <span className="text-muted-foreground">{log.message}</span>
+                                  {log.postsStored != null && <span className="text-muted-foreground">({log.postsStored} posts)</span>}
+                                </li>
+                              ))}
+                            </ul>
+                          </details>
+                        )}
+                      </>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        {enrichmentLogs.filter((l) => l.type === "enriched").length} enriched, {enrichmentLogs.filter((l) => l.type === "failed").length} failed, {enrichmentLogs.filter((l) => l.type === "skip").length} skipped (live)
+                      </p>
+                    )}
+                  </div>
+                )}
+                <div className="grid gap-1">
+                  <p className="font-medium text-muted-foreground">Links</p>
+                  {inlineResult.airtableHitlistUrl && (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={inlineResult.airtableHitlistUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline"
+                      >
+                        Airtable Hitlist table
+                      </a>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(inlineResult.airtableHitlistUrl as string)
+                        }}
+                      >
+                        Copy URL
+                      </Button>
+                    </div>
+                  )}
+                  {inlineResult.airtableAutoLikeUrl && (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={inlineResult.airtableAutoLikeUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline"
+                      >
+                        Airtable Auto Like table
+                      </a>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(inlineResult.airtableAutoLikeUrl as string)
+                        }}
+                      >
+                        Copy URL
+                      </Button>
+                    </div>
+                  )}
+                  {inlineResult.n8nHitlistWorkflowUrl && (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={inlineResult.n8nHitlistWorkflowUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline"
+                      >
+                        n8n Hitlist workflow
+                      </a>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(inlineResult.n8nHitlistWorkflowUrl as string)
+                        }}
+                      >
+                        Copy URL
+                      </Button>
+                    </div>
+                  )}
+                  {inlineResult.n8nAutoLikeWorkflowUrl && (
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={inlineResult.n8nAutoLikeWorkflowUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-primary underline"
+                      >
+                        n8n Auto Like workflow
+                      </a>
+                      <Button
+                        type="button"
+                        size="xs"
+                        variant="outline"
+                        className="h-6 px-2 text-[11px]"
+                        onClick={() => {
+                          void navigator.clipboard?.writeText(inlineResult.n8nAutoLikeWorkflowUrl as string)
+                        }}
+                      >
+                        Copy URL
+                      </Button>
+                    </div>
+                  )}
+                </div>
+                {(inlineResult.airtableHitlistUrl || inlineResult.airtableAutoLikeUrl) &&
+                  inlineResult.airtableUrlsSaved && (
+                  <p className="text-xs text-muted-foreground">
+                    Airtable Hitlist and Auto Like URLs have been saved on the campaign row in Supabase.
+                  </p>
+                )}
+                {rollback &&
+                  (rollback.airtableHitlistTableId ||
+                    rollback.airtableAutoLikeTableId ||
+                    rollback.n8nAutoLikeWorkflowId ||
+                    rollback.n8nHitlistWorkflowId) && (
+                  <div className="pt-2 border-t border-border/50">
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      disabled={rollbackLoading}
+                      onClick={async () => {
+                        setRollbackMessage(null)
+                        setRollbackLoading(true)
+                        try {
+                          const res = await fetch("/api/campaign-manager/inline/rollback", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(rollback),
+                          })
+                          const data = (await res.json().catch(() => ({}))) as {
+                            deleted?: string[]
+                            errors?: string[]
+                            error?: string
+                          }
+                          if (!res.ok) {
+                            setRollbackMessage({
+                              type: "error",
+                              text: data.error || res.statusText || "Rollback failed",
+                            })
+                            return
+                          }
+                          const msg = data.deleted?.length
+                            ? `Deleted: ${data.deleted.join(", ")}${
+                                data.errors?.length ? `. Errors: ${data.errors.join("; ")}` : ""
+                              }`
+                            : data.errors?.length
+                              ? `Errors: ${data.errors.join("; ")}`
+                              : "Nothing was deleted."
+                          setRollbackMessage({
+                            type: data.errors?.length ? "error" : "success",
+                            text: msg,
+                          })
+                          if (!data.errors?.length) {
+                            setRollback(null)
+                            setInlineResult((prev) =>
+                              prev
+                                ? {
+                                    ...prev,
+                                    airtableHitlistUrl: undefined,
+                                    airtableAutoLikeUrl: undefined,
+                                    n8nHitlistWorkflowUrl: undefined,
+                                    n8nAutoLikeWorkflowUrl: undefined,
+                                  }
+                                : null
+                            )
+                          }
+                        } catch (e) {
+                          setRollbackMessage({
+                            type: "error",
+                            text: e instanceof Error ? e.message : "Rollback failed",
+                          })
+                        } finally {
+                          setRollbackLoading(false)
+                        }
+                      }}
+                    >
+                      <Trash2Icon className="mr-2 h-4 w-4" />
+                      {rollbackLoading ? "Deleting…" : "Delete this run's Airtable tables & n8n workflows"}
+                    </Button>
+                    {rollbackMessage && (
+                      <p
+                        className={`mt-1 text-xs ${
+                          rollbackMessage.type === "success"
+                            ? "text-green-600 dark:text-green-400"
+                            : "text-destructive"
+                        }`}
+                      >
+                        {rollbackMessage.text}
+                      </p>
+                    )}
+                    {rollbackMessage?.type === "error" && (
+                      <p className="mt-1 text-xs text-muted-foreground">
+                        You can try again. Airtable table deletion may not be supported on your plan; n8n workflows are still deleted when possible.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+            {(hitlistSchema || autoLikeSchema) && (
+              <div className="space-y-4 rounded-md border bg-muted/20 p-4">
+                <h4 className="text-sm font-semibold">Airtable table schemas</h4>
+                {hitlistSchema && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Hitlist table</p>
+                    <p className="text-xs text-muted-foreground">
+                      Schema source: <strong>{hitlistSchema.schemaSource}</strong>
+                      {hitlistSchema.schemaError && (
+                        <span className="block mt-1 text-amber-600 dark:text-amber-400">
+                          Airtable schema 403 or error — using static fallback: {hitlistSchema.schemaError.slice(0, 120)}
+                          {hitlistSchema.schemaError.length > 120 ? "…" : ""}
+                        </span>
+                      )}
+                    </p>
+                    <div className="overflow-x-auto rounded border">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-muted/50">
+                            <th className="text-left p-2 font-medium">Column name</th>
+                            <th className="text-left p-2 font-medium">Data type</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {hitlistSchema.fields.map((f, i) => (
+                            <tr key={i} className="border-t border-border">
+                              <td className="p-2 font-mono">{f.name}</td>
+                              <td className="p-2 text-muted-foreground">{f.type}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+                {autoLikeSchema && (
+                  <div className="space-y-2">
+                    <p className="text-sm font-medium">Auto Like / Auto Comment table</p>
+                    <p className="text-xs text-muted-foreground">
+                      Schema source: <strong>{autoLikeSchema.schemaSource}</strong>
+                      {autoLikeSchema.schemaError && (
+                        <span className="block mt-1 text-amber-600 dark:text-amber-400">
+                          Airtable schema 403 or error — using static fallback: {autoLikeSchema.schemaError.slice(0, 120)}
+                          {autoLikeSchema.schemaError.length > 120 ? "…" : ""}
+                        </span>
+                      )}
+                    </p>
+                    <div className="overflow-x-auto rounded border">
+                      <table className="w-full text-xs border-collapse">
+                        <thead>
+                          <tr className="bg-muted/50">
+                            <th className="text-left p-2 font-medium">Column name</th>
+                            <th className="text-left p-2 font-medium">Data type</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {autoLikeSchema.fields.map((f, i) => (
+                            <tr key={i} className="border-t border-border">
+                              <td className="p-2 font-mono">{f.name}</td>
+                              <td className="p-2 text-muted-foreground">{f.type}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-3 rounded-md border bg-muted/10 p-4 text-xs">
+              <p className="font-semibold">Airtable button formulas (manual setup)</p>
+              <p className="text-muted-foreground">
+                Buttons with URLs cannot be fully configured via the API. After this run, open the Airtable base using the
+                links above, edit the button fields directly in Airtable, and paste the formulas below into the button URL
+                formula.
+              </p>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-xs">Auto Like / Auto Comment button URL formula</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(AUTO_LIKE_BUTTON_FORMULA)
+                    }}
+                  >
+                    Copy formula
+                  </Button>
+                </div>
+                <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
+                  {AUTO_LIKE_BUTTON_FORMULA}
+                </pre>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-xs">Hitlist URL formula</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(HITLIST_BUTTON_FORMULA)
+                    }}
+                  >
+                    Copy formula
+                  </Button>
+                </div>
+                <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
+                  {HITLIST_BUTTON_FORMULA}
+                </pre>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

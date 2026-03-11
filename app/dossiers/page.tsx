@@ -205,6 +205,9 @@ export default function DossiersPage() {
                 <CardHeader className="pb-2">
                   <div className="flex items-start gap-3">
                     <Avatar className="h-12 w-12 shrink-0">
+                      {lead.profile_picture_url && (
+                        <AvatarImage src={lead.profile_picture_url} alt="" />
+                      )}
                       <AvatarFallback className="text-sm">{getInitials(lead.name)}</AvatarFallback>
                     </Avatar>
                     <div className="min-w-0 flex-1 space-y-0.5">
@@ -299,14 +302,14 @@ export default function DossiersPage() {
       </div>
 
       <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent side="center" className="overflow-y-auto w-full max-w-xl sm:max-w-2xl bg-background text-foreground">
+        <SheetContent side="center" className="overflow-y-auto w-full max-w-3xl sm:max-w-4xl bg-background text-foreground p-8 gap-8" overlayClassName="!backdrop-blur-none bg-black/20">
           {selected && (
             <>
               <SheetHeader className="sr-only">
                 <SheetTitle>{selected.name ?? "—"}</SheetTitle>
                 <SheetDescription>{selected.title ?? "Lead detail"}</SheetDescription>
               </SheetHeader>
-              <div className="flex flex-col gap-6 pt-2">
+              <div className="flex flex-col gap-8 pt-4">
                 {/* Header: avatar + name + title */}
                 <div className="flex items-start gap-4">
                   <Avatar className="h-16 w-16 shrink-0 rounded-full border-2 border-muted">

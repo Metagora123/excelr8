@@ -1,0 +1,342 @@
+import { NextResponse } from "next/server"
+import {
+  parseCsvToNormalizedRows,
+  generateCampaignId,
+  buildCampaignName,
+  createCampaignRow,
+  upsertLeadsAndFillLeadCampaigns,
+  createHitlistTableAndAppendLeads,
+  createAutoLikeTable,
+  duplicateN8nWorkflow,
+  updateCampaignAirtableUrls,
+  updateCampaignLeadCount,
+  createCampaignAutomationRow,
+} from "@/lib/campaign-manager-inline"
+import { runEnrichmentForCampaign } from "@/lib/enrichment-engine"
+import {
+  getAirtableApiKey,
+  getAirtableBaseId,
+  getN8nApiUrl,
+  getN8nAutoLikeWorkflowId,
+  getN8nHitlistWorkflowId,
+  getUnipileApiKey,
+} from "@/lib/env"
+import type { SupabaseProject } from "@/lib/supabase"
+
+export const maxDuration = 120
+
+type Checkpoint =
+  | "campaign_created"
+  | "leads_parsed"
+  | "leads_upserted"
+  | "lead_campaigns_filled"
+  | "leads_enriched"
+  | "airtable_auto_like_table_created"
+  | "airtable_hitlist_table_created"
+  | "n8n_auto_like_workflow_duplicated"
+  | "n8n_hitlist_workflow_duplicated"
+  | "completed"
+
+function streamLine(controller: ReadableStreamDefaultController<Uint8Array>, obj: Record<string, unknown>) {
+  controller.enqueue(new TextEncoder().encode(JSON.stringify(obj) + "\n"))
+}
+
+function parseProject(v: string | null): SupabaseProject {
+  return v === "prod2k26" ? "prod2k26" : "sales2k25"
+}
+
+export async function POST(req: Request) {
+  let formData: FormData
+  try {
+    formData = await req.formData()
+  } catch {
+    return NextResponse.json({ error: "Invalid form data" }, { status: 400 })
+  }
+
+  const file = formData.get("file") as File | null
+  const campaignName = (formData.get("campaignName") as string)?.trim() ?? ""
+  const clientId = (formData.get("clientId") as string)?.trim() ?? ""
+  const category = (formData.get("category") as string)?.trim() ?? ""
+  const managedBy = (formData.get("managedBy") as string)?.trim() ?? ""
+  const project = parseProject(formData.get("supabaseProject") as string)
+  const enableAutoLike = formData.get("enableAutoLike") === "true"
+  const enableHitlist = formData.get("enableHitlist") === "true"
+  const enableAutoLikeWorkflow = formData.get("enableAutoLikeWorkflow") === "true"
+  const enableHitlistWorkflow = formData.get("enableHitlistWorkflow") === "true"
+  const enableCampaignAutomation = formData.get("enableCampaignAutomation") === "true"
+
+  if (!file || file.size === 0) {
+    return NextResponse.json({ error: "CSV file is required" }, { status: 400 })
+  }
+  if (!clientId) {
+    return NextResponse.json({ error: "Client is required for in-app flow" }, { status: 400 })
+  }
+
+  const stream = new ReadableStream<Uint8Array>({
+    async start(controller) {
+      try {
+        const campaignId = generateCampaignId()
+        const dateStr = new Date().toISOString().slice(0, 10)
+        const campaignDisplayName = buildCampaignName({
+          campaignName: campaignName || "Campaign",
+          managedBy: managedBy || "—",
+          category: category || "—",
+          date: dateStr,
+          campaignId,
+        })
+
+        // 1) Create campaign row
+        await createCampaignRow({
+          project,
+          campaignId,
+          campaignName: campaignName || campaignDisplayName,
+          category: category || "—",
+          managedBy: managedBy || "—",
+          clientId,
+        })
+        streamLine(controller, { checkpoint: "campaign_created" as Checkpoint, campaignId })
+
+        // 2) Parse CSV
+        const csvText = await file.text()
+        const normalized = parseCsvToNormalizedRows(csvText)
+        streamLine(controller, { checkpoint: "leads_parsed" as Checkpoint, count: normalized.length })
+
+        if (normalized.length === 0) {
+          streamLine(controller, { error: "No valid leads in CSV (need full_name or profile_url)" })
+          controller.close()
+          return
+        }
+
+        // 3) Upsert leads and fill lead_campaigns
+        const { inserted, updated, leadIdsByProfileUrl } = await upsertLeadsAndFillLeadCampaigns(
+          project,
+          normalized,
+          campaignId,
+          clientId
+        )
+        streamLine(controller, {
+          checkpoint: "leads_upserted" as Checkpoint,
+          inserted,
+          updated,
+        })
+        streamLine(controller, { checkpoint: "lead_campaigns_filled" as Checkpoint })
+        try {
+          await updateCampaignLeadCount(project, campaignId, leadIdsByProfileUrl.size)
+        } catch (e) {
+          streamLine(controller, {
+            error: "Updating campaign lead count failed",
+            detail: e instanceof Error ? e.message : String(e),
+          })
+        }
+
+        // 4) In-app enrichment
+        let enrichmentSummary: { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> } | null = null
+        if (getUnipileApiKey()) {
+          try {
+            enrichmentSummary = await runEnrichmentForCampaign(
+              project,
+              normalized,
+              leadIdsByProfileUrl,
+              (obj) => streamLine(controller, obj)
+            )
+            streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint })
+          } catch (e) {
+            streamLine(controller, {
+              error: "Enrichment failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+            streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint, skipped: true })
+          }
+        } else {
+          streamLine(controller, {
+            enrichment_log: {
+              type: "skip",
+              profile_url: "",
+              full_name: null,
+              message: "Enrichment skipped: UNIPILE_API_KEY not set",
+            },
+          })
+          streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint, skipped: true })
+        }
+
+        const airtableToken = getAirtableApiKey()
+        const airtableBaseId = getAirtableBaseId()
+        let airtableHitlistUrl = ""
+        let airtableAutoLikeUrl = ""
+        let airtableHitlistTableId = ""
+        let airtableAutoLikeTableId = ""
+        let n8nAutoLikeWorkflowId = ""
+        let n8nHitlistWorkflowId = ""
+        let airtableUrlsSaved = false
+
+        const tableNameSuffix = `${campaignName || "Campaign"}-${managedBy}-${category}-${dateStr}-${campaignId}`
+
+        // 5) Airtable: Auto Like table (optional)
+        if (enableAutoLike && airtableToken && airtableBaseId) {
+          try {
+            const autoLikeTableName = `AUTO-LIKE-COMMENT-${tableNameSuffix}`
+            const result = await createAutoLikeTable(airtableBaseId, airtableToken, autoLikeTableName, project)
+            airtableAutoLikeUrl = result.url
+            airtableAutoLikeTableId = result.tableId
+            streamLine(controller, {
+              checkpoint: "airtable_auto_like_table_created" as Checkpoint,
+              tableName: autoLikeTableName,
+              url: result.url,
+              tableId: result.tableId,
+              schemaSource: result.schemaSource,
+              schemaError: result.schemaError,
+              fields: result.fields,
+            })
+          } catch (e) {
+            streamLine(controller, {
+              error: "Airtable Auto Like table failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+          }
+        } else {
+          streamLine(controller, { checkpoint: "airtable_auto_like_table_created" as Checkpoint, skipped: true })
+        }
+
+        // 6) Airtable: Hitlist table + append leads (optional)
+        if (enableHitlist && airtableToken && airtableBaseId) {
+          try {
+            const hitlistTableName = `HITLIST-${tableNameSuffix}`
+            const result = await createHitlistTableAndAppendLeads(
+              airtableBaseId,
+              airtableToken,
+              hitlistTableName,
+              normalized,
+              project,
+              campaignId
+            )
+            airtableHitlistUrl = result.url
+            airtableHitlistTableId = result.tableId
+            streamLine(controller, {
+              checkpoint: "airtable_hitlist_table_created" as Checkpoint,
+              tableName: hitlistTableName,
+              url: result.url,
+              tableId: result.tableId,
+              schemaSource: result.schemaSource,
+              schemaError: result.schemaError,
+              fields: result.fields,
+            })
+          } catch (e) {
+            streamLine(controller, {
+              error: "Airtable Hitlist table failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+          }
+        } else {
+          streamLine(controller, { checkpoint: "airtable_hitlist_table_created" as Checkpoint, skipped: true })
+        }
+
+        // 7) n8n: Duplicate Auto Like workflow (optional)
+        const autoLikeWfId = getN8nAutoLikeWorkflowId()
+        if (enableAutoLikeWorkflow && autoLikeWfId) {
+          try {
+            const { id } = await duplicateN8nWorkflow(autoLikeWfId, `AutoLike-${tableNameSuffix}`)
+            n8nAutoLikeWorkflowId = id
+            streamLine(controller, {
+              checkpoint: "n8n_auto_like_workflow_duplicated" as Checkpoint,
+              workflowId: id,
+            })
+          } catch (e) {
+            streamLine(controller, {
+              error: "n8n Auto Like workflow duplicate failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+          }
+        } else {
+          streamLine(controller, { checkpoint: "n8n_auto_like_workflow_duplicated" as Checkpoint, skipped: true })
+        }
+
+        // 8) n8n: Duplicate Hitlist workflow (optional)
+        const hitlistWfId = getN8nHitlistWorkflowId()
+        if (enableHitlistWorkflow && hitlistWfId) {
+          try {
+            const { id } = await duplicateN8nWorkflow(hitlistWfId, `Hitlist-${tableNameSuffix}`)
+            n8nHitlistWorkflowId = id
+            streamLine(controller, {
+              checkpoint: "n8n_hitlist_workflow_duplicated" as Checkpoint,
+              workflowId: id,
+            })
+          } catch (e) {
+            streamLine(controller, {
+              error: "n8n Hitlist workflow duplicate failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+          }
+        } else {
+          streamLine(controller, { checkpoint: "n8n_hitlist_workflow_duplicated" as Checkpoint, skipped: true })
+        }
+
+        // 9) Persist Airtable URLs on campaign row (if we have them)
+        try {
+          await updateCampaignAirtableUrls(project, campaignId, {
+            airtableHitlistUrl: airtableHitlistUrl || undefined,
+            airtableAutoLikeCommentUrl: airtableAutoLikeUrl || undefined,
+          })
+          airtableUrlsSaved = true
+        } catch (e) {
+          streamLine(controller, {
+            error: "Updating campaign Airtable URLs failed",
+            detail: e instanceof Error ? e.message : String(e),
+          })
+        }
+
+        // 10) In-app campaign automation row (when checkbox enabled and hitlist table exists)
+        if (enableCampaignAutomation && airtableHitlistTableId && airtableBaseId) {
+          try {
+            await createCampaignAutomationRow(project, campaignId, airtableBaseId, airtableHitlistTableId)
+            streamLine(controller, { campaign_automation_created: true })
+          } catch (e) {
+            streamLine(controller, {
+              error: "Campaign automation row failed (ensure in_app_campaign_automations table exists)",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+          }
+        }
+
+        streamLine(controller, {
+          checkpoint: "completed" as Checkpoint,
+          campaignId,
+          airtableHitlistUrl: airtableHitlistUrl || undefined,
+          airtableAutoLikeUrl: airtableAutoLikeUrl || undefined,
+          airtableUrlsSaved: airtableUrlsSaved || undefined,
+          leadsCount: normalized.length,
+          enrichmentSummary: enrichmentSummary ?? undefined,
+          // Rollback: IDs for deleting tables and workflows from this run
+          rollback: {
+            airtableBaseId: airtableBaseId || undefined,
+            airtableHitlistTableId: airtableHitlistTableId || undefined,
+            airtableAutoLikeTableId: airtableAutoLikeTableId || undefined,
+            n8nAutoLikeWorkflowId: n8nAutoLikeWorkflowId || undefined,
+            n8nHitlistWorkflowId: n8nHitlistWorkflowId || undefined,
+          },
+          // n8n workflow editor URLs (same base as API)
+          n8nAutoLikeWorkflowUrl:
+            n8nAutoLikeWorkflowId && getN8nApiUrl()
+              ? `${getN8nApiUrl().replace(/\/$/, "")}/workflow/${n8nAutoLikeWorkflowId}`
+              : undefined,
+          n8nHitlistWorkflowUrl:
+            n8nHitlistWorkflowId && getN8nApiUrl()
+              ? `${getN8nApiUrl().replace(/\/$/, "")}/workflow/${n8nHitlistWorkflowId}`
+              : undefined,
+        })
+      } catch (e) {
+        streamLine(controller, {
+          error: e instanceof Error ? e.message : String(e),
+        })
+      } finally {
+        controller.close()
+      }
+    },
+  })
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "application/x-ndjson",
+      "Cache-Control": "no-store",
+    },
+  })
+}
