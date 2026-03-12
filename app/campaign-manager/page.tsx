@@ -21,7 +21,13 @@ import {
 } from "@/components/ui/select"
 import { TargetIcon, UploadIcon, CheckCircle2Icon, CircleIcon, Trash2Icon } from "lucide-react"
 
-const AUTO_LIKE_BUTTON_FORMULA = `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-unipile"
+function getWebhookSuffix(project: "sales2k25" | "prod2k26"): string {
+  return project === "prod2k26" ? "-prod2k26" : ""
+}
+
+function getAutoLikeButtonFormula(project: "sales2k25" | "prod2k26"): string {
+  const suffix = getWebhookSuffix(project)
+  return `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-unipile${suffix}"
 & "?post_id=" & {post_id}
 
 & "&record_id=" & RECORD_ID()
@@ -36,10 +42,36 @@ const AUTO_LIKE_BUTTON_FORMULA = `"https://n8n.srv1123126.hstgr.cloud/webhook/co
 & "&final_comment=" & ENCODE_URL_COMPONENT({Final_Comment})
 & "&lead_profile=" & ENCODE_URL_COMPONENT({lead_profile})
 & "&lead_name=" & ENCODE_URL_COMPONENT({lead_name})`
+}
 
-const HITLIST_BUTTON_FORMULA = `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-unipile"`
+function getHitlistButtonFormula(project: "sales2k25" | "prod2k26"): string {
+  const suffix = getWebhookSuffix(project)
+  return `"https://n8n.srv1123126.hstgr.cloud/webhook-test/confirm-hitlist${suffix}"
+& "?record_id=" & RECORD_ID()
+& "&campaign_id=" & ENCODE_URL_COMPONENT({campaign_id})
+& "&message_1=" & ENCODE_URL_COMPONENT({Message_1})
+& "&message_2=" & ENCODE_URL_COMPONENT({Message_2})
+& "&message_3=" & ENCODE_URL_COMPONENT({Message_3})
+& "&tempo_1=" & ENCODE_URL_COMPONENT({Tempo_1})
+& "&tempo_2=" & ENCODE_URL_COMPONENT({Tempo_2})
+& "&tempo_3=" & ENCODE_URL_COMPONENT({Tempo_3})
+& "&select_poster=" & ENCODE_URL_COMPONENT({Select_Poster})
+& "&linkedin=" & ENCODE_URL_COMPONENT({LinkedIn})`
+}
 
-const INLINE_CHECKPOINTS: { key: string; label: string }[] = [
+type InlineCheckpointKey =
+  | "campaign_created"
+  | "leads_parsed"
+  | "leads_upserted"
+  | "lead_campaigns_filled"
+  | "leads_enriched"
+  | "airtable_auto_like_table_created"
+  | "airtable_hitlist_table_created"
+  | "n8n_auto_like_workflow_duplicated"
+  | "n8n_hitlist_workflow_duplicated"
+  | "completed"
+
+const INLINE_CHECKPOINTS: { key: InlineCheckpointKey; label: string }[] = [
   { key: "campaign_created", label: "Campaign row created" },
   { key: "leads_parsed", label: "CSV parsed" },
   { key: "leads_upserted", label: "Leads upserted" },
@@ -68,7 +100,9 @@ export default function CampaignManagerPage() {
 
   // In-app flow state
   const [inlineLoading, setInlineLoading] = React.useState(false)
-  const [inlineCheckpoints, setInlineCheckpoints] = React.useState<Record<string, boolean>>({})
+  const [inlineCheckpoints, setInlineCheckpoints] = React.useState<Record<InlineCheckpointKey, boolean>>(
+    {} as Record<InlineCheckpointKey, boolean>
+  )
   const [inlineError, setInlineError] = React.useState<string | null>(null)
   const [enableAutoLike, setEnableAutoLike] = React.useState(true)
   const [enableHitlist, setEnableHitlist] = React.useState(true)
@@ -260,7 +294,8 @@ export default function CampaignManagerPage() {
           try {
             const obj = JSON.parse(line) as Record<string, unknown>
             if (typeof obj.checkpoint === "string") {
-              setInlineCheckpoints((prev) => ({ ...prev, [obj.checkpoint]: true }))
+              const cp = obj.checkpoint as InlineCheckpointKey
+              setInlineCheckpoints((prev) => ({ ...prev, [cp]: true }))
             }
             if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
               setAutoLikeSchema({
@@ -323,7 +358,8 @@ export default function CampaignManagerPage() {
         try {
           const obj = JSON.parse(buffer) as Record<string, unknown>
           if (typeof obj.checkpoint === "string") {
-            setInlineCheckpoints((prev) => ({ ...prev, [obj.checkpoint]: true }))
+            const cp = obj.checkpoint as InlineCheckpointKey
+            setInlineCheckpoints((prev) => ({ ...prev, [cp]: true }))
           }
           if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
             setAutoLikeSchema({
@@ -964,14 +1000,14 @@ export default function CampaignManagerPage() {
                     variant="outline"
                     className="h-7 px-2 text-xs"
                     onClick={() => {
-                      void navigator.clipboard.writeText(AUTO_LIKE_BUTTON_FORMULA)
+                      void navigator.clipboard.writeText(getAutoLikeButtonFormula(supabaseProject))
                     }}
                   >
                     Copy formula
                   </Button>
                 </div>
                 <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
-                  {AUTO_LIKE_BUTTON_FORMULA}
+                  {getAutoLikeButtonFormula(supabaseProject)}
                 </pre>
               </div>
               <div className="space-y-2">
@@ -983,14 +1019,14 @@ export default function CampaignManagerPage() {
                     variant="outline"
                     className="h-7 px-2 text-xs"
                     onClick={() => {
-                      void navigator.clipboard.writeText(HITLIST_BUTTON_FORMULA)
+                      void navigator.clipboard.writeText(getHitlistButtonFormula(supabaseProject))
                     }}
                   >
                     Copy formula
                   </Button>
                 </div>
                 <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
-                  {HITLIST_BUTTON_FORMULA}
+                  {getHitlistButtonFormula(supabaseProject)}
                 </pre>
               </div>
             </div>

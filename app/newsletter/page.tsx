@@ -62,7 +62,9 @@ export default function NewsletterPage() {
   const [htmlPrompt, setHtmlPrompt] = React.useState<string | null>(null)
   const [customImagePrompt, setCustomImagePrompt] = React.useState("")
   const [customHtmlPrompt, setCustomHtmlPrompt] = React.useState("")
-  const [imageModel, setImageModel] = React.useState<"dall-e-3" | "gpt-image-1">("dall-e-3")
+  const [imageModel, setImageModel] = React.useState<
+    "dall-e-3" | "gpt-image-1" | "gemini-3.1-flash-image-preview" | "gemini-3-pro-image-preview" | "gemini-2.5-flash-image"
+  >("dall-e-3")
   const [copiedPromptType, setCopiedPromptType] = React.useState<"image" | "html" | null>(null)
   const [copied, setCopied] = React.useState(false)
   const [status, setStatus] = React.useState<string | null>(null)
@@ -634,7 +636,16 @@ export default function NewsletterPage() {
                 <Label>Image model</Label>
                 <Select
                   value={imageModel}
-                  onValueChange={(v) => setImageModel(v as "dall-e-3" | "gpt-image-1")}
+                  onValueChange={(v) =>
+                    setImageModel(
+                      v as
+                        | "dall-e-3"
+                        | "gpt-image-1"
+                        | "gemini-3.1-flash-image-preview"
+                        | "gemini-3-pro-image-preview"
+                        | "gemini-2.5-flash-image"
+                    )
+                  }
                 >
                   <SelectTrigger>
                     <SelectValue />
@@ -642,10 +653,19 @@ export default function NewsletterPage() {
                   <SelectContent>
                     <SelectItem value="dall-e-3">DALL-E 3 (testing)</SelectItem>
                     <SelectItem value="gpt-image-1">GPT Image 1 (advanced newsletter)</SelectItem>
+                    <SelectItem value="gemini-3.1-flash-image-preview">
+                      Nano Banana 2 (Gemini 3.1 Flash Image Preview)
+                    </SelectItem>
+                    <SelectItem value="gemini-3-pro-image-preview">
+                      Nano Banana Pro (Gemini 3 Pro Image Preview)
+                    </SelectItem>
+                    <SelectItem value="gemini-2.5-flash-image">
+                      Nano Banana (Gemini 2.5 Flash Image)
+                    </SelectItem>
                   </SelectContent>
                 </Select>
                 <p className="text-xs text-muted-foreground">
-                  DALL-E 3 for testing; GPT Image 1 for higher-quality newsletter images.
+                  DALL-E 3 for testing; GPT Image 1 for higher-quality newsletter images; Nano Banana models use Gemini 3.x / 2.5 image APIs.
                 </p>
               </div>
               <div className="space-y-2">

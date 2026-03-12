@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Quick script to test creating the two Airtable tables (Hitlist + Auto Like/Comment)
  * without running the full campaign flow.

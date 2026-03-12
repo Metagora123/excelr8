@@ -368,7 +368,14 @@ export async function findContactsCreatedSince(
   const ids: string[] = []
   let after: string | undefined
   while (true) {
-    const body: any = {
+    const body: {
+      filterGroups: Array<{
+        filters: Array<{ propertyName: string; operator: string; value: string }>
+      }>
+      properties: string[]
+      limit: number
+      after?: string
+    } = {
       filterGroups: [
         {
           filters: [

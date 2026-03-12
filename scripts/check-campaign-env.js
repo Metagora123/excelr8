@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
  * Check that all env vars and external services needed for Campaign Manager
  * (simple n8n webhook + in-app flow with Supabase, Airtable, n8n API) are set and reachable.

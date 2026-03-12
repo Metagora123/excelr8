@@ -85,6 +85,11 @@ export function getOpenAiApiKey(): string {
   ).trim()
 }
 
+/** Gemini / Google AI Studio API key for image generation (newsletter images). */
+export function getGeminiApiKey(): string {
+  return (getEnv("GEMINI_API_KEY") ?? "").trim()
+}
+
 /** Cloudflare R2 (S3-compatible). */
 export function getR2AccountId(): string {
   return (getEnv("CLOUDFLARE_R2_ACCOUNT_ID") ?? "").trim()

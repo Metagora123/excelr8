@@ -1,13 +1,17 @@
 #!/usr/bin/env node
+/* eslint-disable @typescript-eslint/no-require-imports */
 /**
- * Test that SENDGRID_API_KEY is set and accepted by SendGrid.
- * Does not send an email; only verifies the key.
+ * Test that SENDGRID_API_KEY is valid AND send a real test email.
  *
- * Run from project root: node scripts/test-sendgrid.js
+ * Run from project root:
+ *   node scripts/test-sendgrid.js
  */
 
 const fs = require("fs");
 const path = require("path");
+const sgMail = require("@sendgrid/mail");
+
+// -------- env helpers (your existing logic) --------
 
 function loadEnv() {
   const envPath = path.join(process.cwd(), ".env");
@@ -23,7 +27,10 @@ function loadEnv() {
     if (eq <= 0) continue;
     const key = trimmed.slice(0, eq).trim();
     let value = trimmed.slice(eq + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+    if (
+      (value.startsWith('"') && value.endsWith('"')) ||
+      (value.startsWith("'") && value.endsWith("'"))
+    ) {
       value = value.slice(1, -1).trim();
     }
     if (!process.env[key]) process.env[key] = value;
@@ -40,19 +47,19 @@ function getEnv(key) {
   return s;
 }
 
+// -------- main test (key + email send) --------
+
 async function main() {
   loadEnv();
 
   const apiKey = getEnv("SENDGRID_API_KEY");
-  const fromEmail = getEnv("SENDGRID_FROM_EMAIL") || "info@excelr8today.com";
-  const fromName = getEnv("SENDGRID_FROM_NAME") || "Newsletter";
+  const fromEmail = getEnv("SENDGRID_FROM_EMAIL_2") || "info@excelr8today.com";
+  const fromName = getEnv("SENDGRID_FROM_NAME") || "Excelr8 Test";
 
-  console.log("SendGrid API key test\n");
+  console.log("SendGrid API key + email test\n");
 
   if (!apiKey) {
     console.log("  ✗ SENDGRID_API_KEY is not set in .env");
-    console.log("\n  Add your key from https://app.sendgrid.com/settings/api_keys");
-    console.log("  (Create a key with 'Mail Send' or 'Full Access'.)");
     process.exit(1);
   }
 
@@ -60,13 +67,9 @@ async function main() {
   console.log("  SENDGRID_FROM_EMAIL:", fromEmail || "(not set)");
   console.log("  SENDGRID_FROM_NAME:", fromName || "(not set)");
   console.log("");
-  console.log("  Note: Next.js loads .env only at server start. If the app still fails");
-  console.log("  when sending, restart the dev server (stop and run npm run dev again).");
-  console.log("  If you use .env.local, set SENDGRID_API_KEY there too (it overrides .env).");
-  console.log("");
 
+  // 1) Quick key validation (same as before) – optional but helpful
   try {
-    // SendGrid: GET /v3/scopes returns the key's scopes if valid; 401 if invalid
     const res = await fetch("https://api.sendgrid.com/v3/scopes", {
       method: "GET",
       headers: {
@@ -75,40 +78,45 @@ async function main() {
       },
     });
 
-    if (res.ok) {
-      const data = await res.json();
-      const scopes = data.scopes || [];
-      const hasMailSend = scopes.some((s) => s === "mail.send" || s === "mail.batch.create");
-      console.log("  ✓ API key is valid");
-      if (scopes.length > 0) {
-        console.log("  Scopes:", scopes.slice(0, 10).join(", ") + (scopes.length > 10 ? " …" : ""));
-        if (!hasMailSend) {
-          console.log("\n  ⚠️  Key may not have 'mail.send'. Newsletter send could still fail.");
-          console.log("     Create a new key with 'Mail Send' at https://app.sendgrid.com/settings/api_keys");
-        }
-      }
-      console.log("\n✅ SendGrid is ready. You can send from the Newsletter page.");
-      return;
-    }
-
-    if (res.status === 401 || res.status === 403) {
+    if (!res.ok) {
       const text = await res.text();
-      console.log("  ✗ SendGrid rejected the key (401/403 Unauthorized)");
-      console.log("\n  Possible causes:");
-      console.log("  - Key is wrong, expired, or deleted");
-      console.log("  - Key was created without 'Mail Send' (or Full Access)");
-      console.log("\n  Create a new API key at https://app.sendgrid.com/settings/api_keys");
+      console.log("  ✗ Key check failed: HTTP", res.status);
       if (text) console.log("  Response:", text.slice(0, 200));
       process.exit(1);
     }
 
-    console.log("  ✗ Unexpected response: HTTP", res.status);
-    const text = await res.text();
-    if (text) console.log("  Response:", text.slice(0, 300));
-    process.exit(1);
+    const data = await res.json();
+    console.log("  ✓ API key scopes loaded (", (data.scopes || []).length, "scopes )");
   } catch (err) {
-    console.log("  ✗ Request failed:", err.message);
-    console.log("\n  Check your network and that api.sendgrid.com is reachable.");
+    console.log("  ✗ Key check request failed:", err.message);
+    process.exit(1);
+  }
+
+  // 2) Actually send a test email
+  sgMail.setApiKey(apiKey);
+
+  const msg = {
+    to: "dr.dre021@gmail.com",
+    from: { email: fromEmail, name: fromName },
+    subject: "Excelr8 SendGrid test email",
+    text: "This is a plain-text SendGrid test email from Excelr8.",
+    html: "<p>This is a <strong>SendGrid</strong> test email from Excelr8.</p>",
+  };
+
+  try {
+    console.log("\nSending test email to dr.dre021@gmail.com …");
+    const [sendRes] = await sgMail.send(msg);
+    console.log("  ✓ Email sent. Status:", sendRes.statusCode);
+    console.log("  Headers:", sendRes.headers);
+    console.log("\n✅ Done.");
+  } catch (err) {
+    console.error("\nSendGrid send error:");
+    if (err.response) {
+      console.error("  Status:", err.response.statusCode);
+      console.error("  Body:", err.response.body);
+    } else {
+      console.error(err);
+    }
     process.exit(1);
   }
 }

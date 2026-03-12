@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server"
 import OpenAI from "openai"
-import { getOpenAiApiKey } from "@/lib/env"
+import { getOpenAiApiKey, getGeminiApiKey } from "@/lib/env"
 import { getR2ObjectBody, putR2Object } from "@/lib/r2"
 import { getToneDetails } from "@/lib/newsletter-tone"
 import { getContentPrompt, getHtmlPrompt, buildImagePrompt, NEWSLETTER_LANGUAGES } from "@/lib/newsletter-prompts"
@@ -59,7 +59,12 @@ export async function POST(req: Request) {
   }
 
   const { date, selectedKeys, tone, customToneText, customImagePrompt, customHtmlPrompt, origin, imageModel, language: languageParam } = body
-  const selectedImageModel = imageModel === "gpt-image-1" ? "gpt-image-1" : "dall-e-3"
+  const selectedImageModel =
+    imageModel === "gpt-image-1"
+      ? "gpt-image-1"
+      : imageModel && imageModel.startsWith("gemini-")
+        ? imageModel
+        : "dall-e-3"
   const language =
     languageParam && NEWSLETTER_LANGUAGES.includes(languageParam as (typeof NEWSLETTER_LANGUAGES)[number])
       ? (languageParam as (typeof NEWSLETTER_LANGUAGES)[number])
@@ -139,6 +144,7 @@ export async function POST(req: Request) {
         const imageTags: string[] = []
         const imageUrlsOrBase64: string[] = []
         const supabaseUrl = getSupabaseUrl()
+        const geminiApiKey = getGeminiApiKey()
 
         for (let i = 0; i < topStories.length; i++) {
           const story = topStories[i]
@@ -148,39 +154,92 @@ export async function POST(req: Request) {
           imagePrompts.push({ title, summary, prompt })
 
           try {
-            const isDallE = selectedImageModel === "dall-e-3"
-            const imgOptions: Parameters<OpenAI["images"]["generate"]>[0] = isDallE
-              ? {
-                  model: "dall-e-3",
-                  prompt,
-                  n: 1,
-                  size: "1792x1024",
-                  response_format: "url",
-                  quality: "standard",
-                }
-              : {
-                  model: "gpt-image-1",
-                  prompt,
-                  n: 1,
-                  size: "1536x1024",
-                  quality: "high",
-                }
-            const imgRes = await openai.images.generate(imgOptions)
-            const data = "data" in imgRes && Array.isArray(imgRes.data) ? imgRes.data : []
-            const first = data[0]
-            const imageUrl = first?.url
-            const b64 = first && "b64_json" in first ? (first as { b64_json?: string }).b64_json : undefined
+            let publicUrl: string | undefined
 
-            let publicUrl: string
-            if (imageUrl) {
-              publicUrl = imageUrl
-            } else if (b64) {
-              publicUrl = `data:image/png;base64,${b64}`
+            if (selectedImageModel.startsWith("gemini-")) {
+              if (!geminiApiKey) {
+                imageTags.push("")
+                imageUrlsOrBase64.push("")
+                continue
+              }
+              const geminiRes = await fetch(
+                "https://generativelanguage.googleapis.com/v1beta/models/" +
+                  encodeURIComponent(selectedImageModel) +
+                  ":generateContent?key=" +
+                  encodeURIComponent(geminiApiKey),
+                {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                  },
+                  body: JSON.stringify({
+                    contents: [
+                      {
+                        parts: [{ text: prompt }],
+                      },
+                    ],
+                    generationConfig: {
+                      responseMimeType: "image/png",
+                    },
+                  }),
+                }
+              )
+              if (!geminiRes.ok) {
+                imageTags.push("")
+                imageUrlsOrBase64.push("")
+                continue
+              }
+              const geminiJson = (await geminiRes.json()) as {
+                candidates?: Array<{
+                  content?: { parts?: Array<{ inlineData?: { data?: string; mimeType?: string } }> }
+                }>
+              }
+              const inlineData =
+                geminiJson.candidates?.[0]?.content?.parts?.[0]?.inlineData
+              const b64data = inlineData?.data as string | undefined
+              const mimeType =
+                (inlineData?.mimeType as string | undefined) || "image/png"
+              if (!b64data) {
+                imageTags.push("")
+                imageUrlsOrBase64.push("")
+                continue
+              }
+              publicUrl = `data:${mimeType};base64,${b64data}`
             } else {
-              imageTags.push("")
-              imageUrlsOrBase64.push("")
-              continue
+              const isDallE = selectedImageModel === "dall-e-3"
+              const imgOptions: Parameters<OpenAI["images"]["generate"]>[0] = isDallE
+                ? {
+                    model: "dall-e-3",
+                    prompt,
+                    n: 1,
+                    size: "1792x1024",
+                    response_format: "url",
+                    quality: "standard",
+                  }
+                : {
+                    model: "gpt-image-1",
+                    prompt,
+                    n: 1,
+                    size: "1536x1024",
+                    quality: "high",
+                  }
+              const imgRes = await openai.images.generate(imgOptions)
+              const data = "data" in imgRes && Array.isArray(imgRes.data) ? imgRes.data : []
+              const first = data[0]
+              const imageUrl = first?.url
+              const b64 = first && "b64_json" in first ? (first as { b64_json?: string }).b64_json : undefined
+
+              if (imageUrl) {
+                publicUrl = imageUrl
+              } else if (b64) {
+                publicUrl = `data:image/png;base64,${b64}`
+              } else {
+                imageTags.push("")
+                imageUrlsOrBase64.push("")
+                continue
+              }
             }
+
             // Upload to Supabase for persistent URL (optional)
             try {
               const supabase = createClient()
