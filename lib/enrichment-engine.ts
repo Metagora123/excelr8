@@ -393,7 +393,7 @@ export async function runEnrichmentForCampaign(
     const leadId = leadIdsByProfileUrl.get(profileUrl)
     if (!leadId) {
       skipCount++
-      streamLog({ type: "skip", profile_url, full_name: lead.full_name ?? null, message: "Lead id not found" })
+      streamLog({ type: "skip", profile_url: profileUrl, full_name: lead.full_name ?? null, message: "Lead id not found" })
       continue
     }
 
@@ -404,7 +404,7 @@ export async function runEnrichmentForCampaign(
     } catch (e) {
       failedCount++
       const msg = e instanceof Error ? e.message : String(e)
-      streamLog({ type: "failed", profile_url, full_name: lead.full_name ?? null, message: msg })
+      streamLog({ type: "failed", profile_url: profileUrl, full_name: lead.full_name ?? null, message: msg })
     }
   }
 

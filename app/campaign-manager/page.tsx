@@ -250,7 +250,7 @@ export default function CampaignManagerPage() {
     }
     setInlineLoading(true)
     setInlineError(null)
-    setInlineCheckpoints({})
+    setInlineCheckpoints({} as Record<InlineCheckpointKey, boolean>)
     setInlineResult(null)
     setHitlistSchema(null)
     setAutoLikeSchema(null)

@@ -137,7 +137,7 @@ export async function runCampaignAutomation(
   const { data: automation, error: fetchError } = await supabase
     .from("in_app_campaign_automations")
     .select(
-      "id, campaign_id, airtable_base_id, airtable_table_id, default_unipile_sender_id, total_invites_sent, invites_sent_today, total_to_be_messaged, total_rejected, run_logs"
+      "id, campaign_id, airtable_base_id, airtable_table_id, default_unipile_sender_id, total_invites_sent, invites_sent_today, total_to_be_messaged, total_rejected, last_run_at, run_logs"
     )
     .eq("id", automationId)
     .single()

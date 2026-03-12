@@ -610,7 +610,7 @@ export async function resolveHitlistSchema(
       fields: [...HITLIST_TABLE_FIELDS, selectPosterField],
     }
   }
-  const fields = [...result.fields]
+  const fields = [...(result.fields ?? [])]
   const posterIdx = fields.findIndex((f) => f.name === "Select_Poster")
   if (posterIdx >= 0) {
     fields[posterIdx] = selectPosterField
@@ -650,7 +650,7 @@ export async function resolveAutoLikeSchema(
       fields,
     }
   }
-  const fields = [...result.fields]
+  const fields = [...(result.fields ?? [])]
   const posterIdx = fields.findIndex((f) => f.name === "Select_Poster")
   if (posterIdx >= 0) {
     fields[posterIdx] = selectPosterField
