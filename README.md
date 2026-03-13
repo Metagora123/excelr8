@@ -198,3 +198,5 @@ From `package.json`:
 - `npm run hubspot:test` – test HubSpot API key.
 
 Some of these hit real external services (Airtable, HubSpot, SendGrid), so prefer running them against non‑production credentials first.
+
+cron push
