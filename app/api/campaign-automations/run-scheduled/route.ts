@@ -6,7 +6,7 @@ import type { SupabaseProject } from "@/lib/supabase"
 /**
  * Returns true if an automation with this schedule and last_run_at is due to run now (UTC).
  * Supports: "0 6 * * *" (daily 6:00), "interval:24" (after 1 day), "interval:72" (after 3 days), "interval:168" (after 1 week).
- * Legacy: "0 */N * * *" (every N hours) still works.
+ * Legacy: every-N-hours cron pattern still works.
  */
 function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
   const now = new Date()
@@ -15,7 +15,7 @@ function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
 
   const raw = scheduleCron.trim()
 
-  // "interval:N" – run every N hours (e.g. 24 = 1 day, 72 = 3 days, 168 = 1 week)
+  // interval:N = run every N hours (24 = 1 day, 72 = 3 days, 168 = 1 week)
   if (raw.startsWith("interval:")) {
     const n = parseInt(raw.slice(9), 10)
     if (!Number.isFinite(n) || n < 1) return false
@@ -29,7 +29,7 @@ function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
   const last = new Date(lastRunAt)
   const lastMs = last.getTime()
 
-  // "0 6 * * *" – daily at 6:00 UTC
+  // "0 6 * * *" = daily at 6:00 UTC
   if (parts[0] === "0" && parts[1] === "6" && parts[2] === "*" && parts[3] === "*" && parts[4] === "*") {
     const today6 = new Date(now)
     today6.setUTCHours(6, 0, 0, 0)
@@ -37,7 +37,7 @@ function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
     return lastMs < today6.getTime()
   }
 
-  // "0 */N * * *" – every N hours (legacy)
+  // "0 */N * * *" = every N hours (legacy)
   if (parts[1].startsWith("*/")) {
     const n = parseInt(parts[1].slice(2), 10)
     if (!Number.isFinite(n) || n < 1) return false
@@ -51,8 +51,9 @@ const PROJECTS: SupabaseProject[] = ["sales2k25", "prod2k26"]
 
 /**
  * GET (or POST) /api/campaign-automations/run-scheduled
- * Called by Vercel Cron every 15 minutes. Runs automations that are due per their schedule_cron.
+ * Called by Vercel Cron once per day. Runs automations that are due per their schedule_cron.
  * Secured by CRON_SECRET (Bearer token in Authorization header).
+ * Note: Do not put the character sequence * and / inside block comments here - Turbopack treats it as comment end and breaks the build.
  */
 export async function GET(req: Request) {
   const secret = getCronSecret()
