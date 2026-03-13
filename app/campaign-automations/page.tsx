@@ -37,9 +37,9 @@ import { useSupabaseProject } from "@/lib/supabase-project-context"
 
 const SCHEDULE_OPTIONS: { value: string; label: string }[] = [
   { value: "0 6 * * *", label: "Daily (6:00)" },
-  { value: "0 */12 * * *", label: "Every 12 hours" },
-  { value: "0 */6 * * *", label: "Every 6 hours" },
-  { value: "0 */3 * * *", label: "Every 3 hours" },
+  { value: "interval:24", label: "After 1 day" },
+  { value: "interval:72", label: "After 3 days" },
+  { value: "interval:168", label: "After 1 week" },
 ]
 
 type RunLogEntry = {

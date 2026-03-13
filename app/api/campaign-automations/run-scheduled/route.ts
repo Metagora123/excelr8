@@ -5,20 +5,31 @@ import type { SupabaseProject } from "@/lib/supabase"
 
 /**
  * Returns true if an automation with this schedule and last_run_at is due to run now (UTC).
- * Supports the same cron expressions used in the UI: Daily (6:00), Every 12/6/3 hours.
+ * Supports: "0 6 * * *" (daily 6:00), "interval:24" (after 1 day), "interval:72" (after 3 days), "interval:168" (after 1 week).
+ * Legacy: "0 */N * * *" (every N hours) still works.
  */
 function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
   const now = new Date()
   const nowMs = now.getTime()
   if (!lastRunAt) return true
 
-  const parts = scheduleCron.trim().split(/\s+/)
+  const raw = scheduleCron.trim()
+
+  // "interval:N" – run every N hours (e.g. 24 = 1 day, 72 = 3 days, 168 = 1 week)
+  if (raw.startsWith("interval:")) {
+    const n = parseInt(raw.slice(9), 10)
+    if (!Number.isFinite(n) || n < 1) return false
+    const last = new Date(lastRunAt)
+    return nowMs - last.getTime() >= n * 60 * 60 * 1000
+  }
+
+  const parts = raw.split(/\s+/)
   if (parts.length < 5) return false
 
   const last = new Date(lastRunAt)
   const lastMs = last.getTime()
 
-  // "0 6 * * *" – daily at 6:00 UTC: due if now >= today 6:00 and last run was before today 6:00
+  // "0 6 * * *" – daily at 6:00 UTC
   if (parts[0] === "0" && parts[1] === "6" && parts[2] === "*" && parts[3] === "*" && parts[4] === "*") {
     const today6 = new Date(now)
     today6.setUTCHours(6, 0, 0, 0)
@@ -26,7 +37,7 @@ function isDue(scheduleCron: string, lastRunAt: string | null): boolean {
     return lastMs < today6.getTime()
   }
 
-  // "0 */N * * *" – every N hours
+  // "0 */N * * *" – every N hours (legacy)
   if (parts[1].startsWith("*/")) {
     const n = parseInt(parts[1].slice(2), 10)
     if (!Number.isFinite(n) || n < 1) return false

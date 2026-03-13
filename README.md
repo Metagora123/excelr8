@@ -152,7 +152,7 @@ The active project flows from the UI into all relevant API routes via a `project
 
 The schedules you set in Campaign Automations (e.g. **Daily (6:00)**, **Every 6 hours**) are enforced by **Vercel Cron**, not by the app alone.
 
-1. **`vercel.json`** defines a cron that hits `/api/campaign-automations/run-scheduled` every **hour** (`0 * * * *`).
+1. **`vercel.json`** defines a cron that hits `/api/campaign-automations/run-scheduled` **once per day** at 6:00 UTC (`0 6 * * *`). This matches Vercel **Hobby (free)** limits: cron on Hobby can only run once per day (hourly expressions fail deployment).
 2. That route loads active automations for both Supabase projects, checks each `schedule_cron` and `last_run_at`, and runs any that are **due** (same logic as “Run now” – updates both `in_app_campaign_automations` and `campaigns.invites_sent`).
 3. The route is protected by **`CRON_SECRET`**: Vercel sends it as `Authorization: Bearer <CRON_SECRET>` when invoking the cron. You must set `CRON_SECRET` in your Vercel project (Settings → Environment Variables). Generate a value with e.g. `openssl rand -hex 32`.
 
@@ -161,6 +161,8 @@ The schedules you set in Campaign Automations (e.g. **Daily (6:00)**, **Every 6 
 - Add env var: `CRON_SECRET` = a long random string (Production, and optionally Preview).
 - Deploy. Cron runs only on **Production** deployments.
 - Schedules use **UTC** (e.g. “Daily (6:00)” = 6:00 UTC).
+
+**Hobby (free) plan:** Vercel only allows **one run per day**. So with `0 6 * * *`, the checker runs once daily (~6:00 UTC). “Daily (6:00)” automations run as intended; “Every 6 hours” / “Every 3 hours” will run **at most once that day** (when the cron fires). To get true hourly checks on free tier, use an external cron (e.g. [cron-job.org](https://cron-job.org)) to call `GET https://your-app.vercel.app/api/campaign-automations/run-scheduled` with header `Authorization: Bearer YOUR_CRON_SECRET` every hour.
 
 ---
 
