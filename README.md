@@ -3,7 +3,7 @@
 Internal dashboard for Excelr8 – campaign manager, in‑app automations, KPI, newsletters, radar, and HubSpot sync – built on Next.js (App Router), Supabase, Airtable, n8n, Unipile, and SendGrid.
 
 Repo: [`https://github.com/MyExcelr8/excelr8`](https://github.com/MyExcelr8/excelr8)
-
+Legacy CRON UPDATES
 ---
 
 ## Business context
