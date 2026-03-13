@@ -173,3 +173,8 @@ export function getSendGridFromEmail(): string {
 export function getSendGridFromName(): string {
   return (getEnv("SENDGRID_FROM_NAME") ?? "Newsletter").trim()
 }
+
+/** Secret for authenticating Vercel Cron (or other cron) calls to run-scheduled automations. */
+export function getCronSecret(): string {
+  return (getEnv("CRON_SECRET") ?? "").trim()
+}

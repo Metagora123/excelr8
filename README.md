@@ -57,6 +57,8 @@ Optional integrations:
 - HubSpot (`HUBSPOT_ACCESS_TOKEN` or `HUBSPOT_PERSONAL_ACCESS_KEY`)
 - SendGrid (`SENDGRID_API_KEY`, `SENDGRID_FROM_EMAIL_2`, `SENDGRID_FROM_NAME`)
 
+For **scheduled** campaign automations on Vercel, set `CRON_SECRET` (see [Scheduled automations](#scheduled-automations)).
+
 You can sanity‑check the Campaign Manager env with:
 
 ```bash
@@ -75,7 +77,7 @@ Then open `http://localhost:3000`.
 The main areas:
 
 - `/campaign-manager` – CSV → Supabase leads, campaign rows, Airtable hitlist/auto‑like tables, n8n workflows, in‑app enrichment.
-- `/campaign-automations` – in‑app hitlist automations (per‑campaign), “Run now”, run logs.
+- `/campaign-automations` – in‑app hitlist automations (per‑campaign), “Run now”, run logs. Schedules (Daily, Every 6h, etc.) are run by **Vercel Cron**; see [Scheduled automations](#scheduled-automations) below.
 - `/kpi` – top‑level KPIs from `campaigns` + `in_app_campaign_automations`.
 - `/newsletter` – weekly newsletter generator (content + images + HTML).
 - `/radar` – LinkedIn post radar using `lead_posts` + Unipile.
@@ -143,6 +145,22 @@ The active project flows from the UI into all relevant API routes via a `project
 
 - **SendGrid**
   - Used for transactional or test emails (`scripts/test-sendgrid.js`), and can be wired into newsletter flows if needed.
+
+---
+
+## Scheduled automations
+
+The schedules you set in Campaign Automations (e.g. **Daily (6:00)**, **Every 6 hours**) are enforced by **Vercel Cron**, not by the app alone.
+
+1. **`vercel.json`** defines a cron that hits `/api/campaign-automations/run-scheduled` every **hour** (`0 * * * *`).
+2. That route loads active automations for both Supabase projects, checks each `schedule_cron` and `last_run_at`, and runs any that are **due** (same logic as “Run now” – updates both `in_app_campaign_automations` and `campaigns.invites_sent`).
+3. The route is protected by **`CRON_SECRET`**: Vercel sends it as `Authorization: Bearer <CRON_SECRET>` when invoking the cron. You must set `CRON_SECRET` in your Vercel project (Settings → Environment Variables). Generate a value with e.g. `openssl rand -hex 32`.
+
+**Setup on Vercel**
+
+- Add env var: `CRON_SECRET` = a long random string (Production, and optionally Preview).
+- Deploy. Cron runs only on **Production** deployments.
+- Schedules use **UTC** (e.g. “Daily (6:00)” = 6:00 UTC).
 
 ---
 
