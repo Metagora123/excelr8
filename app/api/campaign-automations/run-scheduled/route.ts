@@ -68,6 +68,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
+  // So you can confirm in Vercel Logs that the cron (or manual call) ran
+  console.log("[run-scheduled] triggered at", new Date().toISOString())
+
   const results: { project: string; automationId: string; status: string; error?: string }[] = []
 
   for (const project of PROJECTS) {

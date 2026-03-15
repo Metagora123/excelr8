@@ -38,6 +38,7 @@ import {
   SearchIcon,
   Share2Icon,
   ZapIcon,
+  ServerCogIcon,
 } from "lucide-react"
 import { useSupabaseProject } from "@/lib/supabase-project-context"
 
@@ -59,6 +60,7 @@ const data = {
     { title: "HubSpot Export", url: "/hubspot", icon: <Share2Icon /> },
   ],
   navSecondary: [
+    { title: "Env check", url: "/env-check", icon: <ServerCogIcon /> },
     { title: "Settings", url: "#", icon: <Settings2Icon /> },
     { title: "Get Help", url: "#", icon: <CircleHelpIcon /> },
     { title: "Search", url: "#", icon: <SearchIcon /> },

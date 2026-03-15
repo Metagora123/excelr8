@@ -76,7 +76,7 @@ Then open `http://localhost:3000`.
 
 The main areas:
 
-- `/campaign-manager` – CSV → Supabase leads, campaign rows, Airtable hitlist/auto‑like tables, n8n workflows, in‑app enrichment.
+- `/campaign-manager` – CSV → Supabase leads, campaign rows, Airtable hitlist/auto‑like tables, n8n workflows, in‑app enrichment. **Inline create** is limited by Vercel’s serverless timeout (~120s on Hobby); the app caps at **25 leads per run** to avoid mid-run timeouts—split larger CSVs or run multiple times.
 - `/campaign-automations` – in‑app hitlist automations (per‑campaign), “Run now”, run logs. Schedules (Daily, Every 6h, etc.) are run by **Vercel Cron**; see [Scheduled automations](#scheduled-automations) below.
 - `/kpi` – top‑level KPIs from `campaigns` + `in_app_campaign_automations`.
 - `/newsletter` – weekly newsletter generator (content + images + HTML).
@@ -125,6 +125,7 @@ The active project flows from the UI into all relevant API routes via a `project
     - **Auto Like / Auto Comment table** (`AUTO-LIKE-COMMENT-…`) for post engagement.
   - Schemas are cloned via Airtable Metadata API or a static fallback, and summarized visually for operators.
   - Button URL formulas are copied manually from `/campaign-manager` (Auto Like / Comment and Hitlist formulas).
+  - **404 NOT_FOUND** when creating tables: check `AIRTABLE_BASE_ID` (wrong base ID, base deleted, or no access). These errors are logged server-side in Vercel Logs under the `/api/campaign-manager/inline` request.
 
 - **n8n**
   - Classic flow: Campaign CSV → n8n webhooks (now mainly superseded by in‑app flow).

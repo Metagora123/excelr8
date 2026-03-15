@@ -145,6 +145,7 @@ export default function CampaignManagerPage() {
     fields: Array<{ name: string; type: string }>
   } | null>(null)
   const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const inlineInputRef = React.useRef<HTMLInputElement>(null)
@@ -178,6 +179,7 @@ export default function CampaignManagerPage() {
     const f = e.target.files?.[0]
     setFile(f ?? null)
     setPreviewLeads([])
+    setExcludePreviewIndices([])
     setPreviewError(null)
   }
 
@@ -186,6 +188,7 @@ export default function CampaignManagerPage() {
     setPreviewLoading(true)
     setPreviewError(null)
     setPreviewLeads([])
+    setExcludePreviewIndices([])
     try {
       const formData = new FormData()
       formData.append("file", file)
@@ -202,6 +205,10 @@ export default function CampaignManagerPage() {
     } finally {
       setPreviewLoading(false)
     }
+  }
+
+  const removeLeadFromPreview = (rowIndex: number) => {
+    setExcludePreviewIndices((prev) => [...prev, rowIndex].sort((a, b) => a - b))
   }
 
   const handleSubmit = async () => {
@@ -270,6 +277,9 @@ export default function CampaignManagerPage() {
       formData.append("enableAutoLikeWorkflow", String(enableAutoLikeWorkflow))
       formData.append("enableHitlistWorkflow", String(enableHitlistWorkflow))
       formData.append("enableCampaignAutomation", String(enableCampaignAutomation))
+      if (excludePreviewIndices.length > 0) {
+        formData.append("excludeRows", JSON.stringify(excludePreviewIndices))
+      }
       const res = await fetch("/api/campaign-manager/inline", { method: "POST", body: formData })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -627,7 +637,7 @@ export default function CampaignManagerPage() {
             {previewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
                 <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
-                <p className="text-xs text-muted-foreground">Bullets (•), hyphens (-), and leading dots removed; spaces collapsed.</p>
+                <p className="text-xs text-muted-foreground">Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create.</p>
                 <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
                   <table className="w-full text-xs border-collapse">
                     <thead className="sticky top-0 bg-muted/80">
@@ -635,19 +645,38 @@ export default function CampaignManagerPage() {
                         <th className="text-left p-2 font-medium">Enrich_person</th>
                         <th className="text-left p-2 font-medium">A Email</th>
                         <th className="text-left p-2 font-medium">LinkedIn</th>
+                        <th className="w-8 p-2" aria-label="Remove" />
                       </tr>
                     </thead>
                     <tbody>
-                      {previewLeads.map((row, i) => (
-                        <tr key={i} className="border-t border-border">
-                          <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
-                          <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
-                          <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
-                        </tr>
-                      ))}
+                      {previewLeads
+                        .map((row, i) => ({ row, i }))
+                        .filter(({ i }) => !excludePreviewIndices.includes(i))
+                        .map(({ row, i }) => (
+                          <tr key={i} className="border-t border-border">
+                            <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
+                            <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
+                            <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                            <td className="p-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                onClick={() => removeLeadFromPreview(i)}
+                                title="Remove this lead from campaign"
+                              >
+                                <Trash2Icon className="h-3.5 w-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>
+                {excludePreviewIndices.length > 0 && (
+                  <p className="text-xs text-muted-foreground">{excludePreviewIndices.length} row(s) excluded from campaign. Re-run Preview to reset.</p>
+                )}
               </div>
             )}
             <div className="space-y-2">

@@ -536,7 +536,13 @@ export async function createAirtableTable(
   })
   if (!res.ok) {
     const t = await res.text()
-    throw new Error(`Airtable create table: ${res.status} ${t}`)
+    const msg = `Airtable create table: ${res.status} ${t}`
+    if (res.status === 404) {
+      console.error("[Airtable] 404 NOT_FOUND creating table. Check AIRTABLE_BASE_ID: base may not exist, be deleted, or you may not have access.", { baseId: baseId.slice(0, 6) + "…", tableName, status: res.status, body: t })
+    } else {
+      console.error("[Airtable] create table failed", { baseId: baseId.slice(0, 6) + "…", tableName, status: res.status, body: t })
+    }
+    throw new Error(msg)
   }
   const data = (await res.json()) as { id?: string }
   const tableId = data.id ?? ""

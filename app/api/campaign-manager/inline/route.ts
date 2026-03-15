@@ -23,7 +23,11 @@ import {
 } from "@/lib/env"
 import type { SupabaseProject } from "@/lib/supabase"
 
+// Vercel Hobby: max 60s (some regions 120s). Enrichment (Unipile per lead) is the bottleneck; large CSVs will timeout.
 export const maxDuration = 120
+
+/** Max leads per inline run to avoid hitting runtime timeout (enrichment is ~10–30s per lead). */
+const INLINE_MAX_LEADS = 25
 
 type Checkpoint =
   | "campaign_created"
@@ -64,6 +68,13 @@ export async function POST(req: Request) {
   const enableAutoLikeWorkflow = formData.get("enableAutoLikeWorkflow") === "true"
   const enableHitlistWorkflow = formData.get("enableHitlistWorkflow") === "true"
   const enableCampaignAutomation = formData.get("enableCampaignAutomation") === "true"
+  let excludeRows: number[] = []
+  try {
+    const raw = formData.get("excludeRows") as string | null
+    if (raw) excludeRows = JSON.parse(raw) as number[]
+  } catch {
+    excludeRows = []
+  }
 
   if (!file || file.size === 0) {
     return NextResponse.json({ error: "CSV file is required" }, { status: 400 })
@@ -98,11 +109,23 @@ export async function POST(req: Request) {
 
         // 2) Parse CSV
         const csvText = await file.text()
-        const normalized = parseCsvToNormalizedRows(csvText)
-        streamLine(controller, { checkpoint: "leads_parsed" as Checkpoint, count: normalized.length })
+        let normalized = parseCsvToNormalizedRows(csvText)
+        if (excludeRows.length > 0) {
+          normalized = normalized.filter((_, i) => !excludeRows.includes(i))
+          streamLine(controller, { checkpoint: "leads_parsed" as Checkpoint, count: normalized.length, excluded: excludeRows.length })
+        } else {
+          streamLine(controller, { checkpoint: "leads_parsed" as Checkpoint, count: normalized.length })
+        }
 
         if (normalized.length === 0) {
           streamLine(controller, { error: "No valid leads in CSV (need full_name or profile_url)" })
+          controller.close()
+          return
+        }
+        if (normalized.length > INLINE_MAX_LEADS) {
+          streamLine(controller, {
+            error: `Too many leads (${normalized.length}). Max ${INLINE_MAX_LEADS} per run to avoid timeout. Split your CSV or run in smaller batches.`,
+          })
           controller.close()
           return
         }
@@ -188,9 +211,14 @@ export async function POST(req: Request) {
               fields: result.fields,
             })
           } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] Airtable Auto Like table failed:", detail, "(404 = wrong AIRTABLE_BASE_ID or base not found.)")
+            const hint = /404|NOT_FOUND/i.test(detail)
+              ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+              : ""
             streamLine(controller, {
               error: "Airtable Auto Like table failed",
-              detail: e instanceof Error ? e.message : String(e),
+              detail: detail + hint,
             })
           }
         } else {
@@ -221,9 +249,14 @@ export async function POST(req: Request) {
               fields: result.fields,
             })
           } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] Airtable Hitlist table failed:", detail, "(404 usually means wrong AIRTABLE_BASE_ID or base not found.)")
+            const hint = /404|NOT_FOUND/i.test(detail)
+              ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+              : ""
             streamLine(controller, {
               error: "Airtable Hitlist table failed",
-              detail: e instanceof Error ? e.message : String(e),
+              detail: detail + hint,
             })
           }
         } else {
@@ -241,9 +274,11 @@ export async function POST(req: Request) {
               workflowId: id,
             })
           } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] n8n Auto Like workflow duplicate failed:", detail)
             streamLine(controller, {
               error: "n8n Auto Like workflow duplicate failed",
-              detail: e instanceof Error ? e.message : String(e),
+              detail,
             })
           }
         } else {
@@ -261,9 +296,11 @@ export async function POST(req: Request) {
               workflowId: id,
             })
           } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] n8n Hitlist workflow duplicate failed:", detail)
             streamLine(controller, {
               error: "n8n Hitlist workflow duplicate failed",
-              detail: e instanceof Error ? e.message : String(e),
+              detail,
             })
           }
         } else {
@@ -278,9 +315,11 @@ export async function POST(req: Request) {
           })
           airtableUrlsSaved = true
         } catch (e) {
+          const detail = e instanceof Error ? e.message : String(e)
+          console.error("[inline] Updating campaign Airtable URLs failed:", detail)
           streamLine(controller, {
             error: "Updating campaign Airtable URLs failed",
-            detail: e instanceof Error ? e.message : String(e),
+            detail,
           })
         }
 
@@ -290,9 +329,11 @@ export async function POST(req: Request) {
             await createCampaignAutomationRow(project, campaignId, airtableBaseId, airtableHitlistTableId)
             streamLine(controller, { campaign_automation_created: true })
           } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] Campaign automation row failed:", detail)
             streamLine(controller, {
               error: "Campaign automation row failed (ensure in_app_campaign_automations table exists)",
-              detail: e instanceof Error ? e.message : String(e),
+              detail,
             })
           }
         }
