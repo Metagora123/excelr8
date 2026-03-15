@@ -12,6 +12,7 @@ import {
   updateCampaignAirtableUrls,
   updateCampaignLeadCount,
   createCampaignAutomationRow,
+  triggerOnDemandEnrichment,
 } from "@/lib/campaign-manager-inline"
 import { runEnrichmentForCampaign } from "@/lib/enrichment-engine"
 import {
@@ -123,13 +124,6 @@ export async function POST(req: Request) {
           controller.close()
           return
         }
-        if (normalized.length > INLINE_MAX_LEADS) {
-          streamLine(controller, {
-            error: `Too many leads (${normalized.length}). Max ${INLINE_MAX_LEADS} per run to avoid timeout. Split your CSV or run in smaller batches.`,
-          })
-          controller.close()
-          return
-        }
 
         // 3) Upsert leads and fill lead_campaigns
         const { inserted, updated, leadIdsByProfileUrl } = await upsertLeadsAndFillLeadCampaigns(
@@ -153,9 +147,33 @@ export async function POST(req: Request) {
           })
         }
 
-        // 4) In-app enrichment
+        // 4) Enrichment: in-app (≤25 leads) or on-demand n8n (>25 leads)
+        const useOnDemandEnrichment = normalized.length > INLINE_MAX_LEADS
         let enrichmentSummary: { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> } | null = null
-        if (getUnipileApiKey()) {
+        let onDemandEnrichment: { sent: boolean; errors: string[] } | null = null
+
+        if (useOnDemandEnrichment) {
+          try {
+            const result = await triggerOnDemandEnrichment(
+              campaignId,
+              clientId,
+              normalized,
+              leadIdsByProfileUrl
+            )
+            onDemandEnrichment = { sent: result.sent, errors: result.errors }
+            streamLine(controller, {
+              checkpoint: "leads_enriched" as Checkpoint,
+              on_demand_enrichment: true,
+              onDemandEnrichment: { sent: result.sent, errors: result.errors },
+            })
+          } catch (e) {
+            streamLine(controller, {
+              error: "On-demand enrichment trigger failed",
+              detail: e instanceof Error ? e.message : String(e),
+            })
+            streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint, skipped: true })
+          }
+        } else if (getUnipileApiKey()) {
           try {
             enrichmentSummary = await runEnrichmentForCampaign(
               project,
@@ -358,6 +376,7 @@ export async function POST(req: Request) {
           airtableUrlsSaved: airtableUrlsSaved || undefined,
           leadsCount: normalized.length,
           enrichmentSummary: enrichmentSummary ?? undefined,
+          onDemandEnrichment: onDemandEnrichment ?? undefined,
           // Rollback: IDs for deleting tables and workflows from this run
           rollback: {
             airtableBaseId: airtableBaseId || undefined,

@@ -13,7 +13,8 @@
     "check:campaign-env": "node scripts/check-campaign-env.js",
     "check:campaign-env:live": "node scripts/check-campaign-env.js --live",
     "test:airtable-campaign-tables": "node scripts/test-airtable-campaign-tables.js",
-    "hubspot:test": "node scripts/hubspot-pat-test.js"
+    "hubspot:test": "node scripts/hubspot-pat-test.js",
+    "docs:pdf": "node scripts/build-client-docs-pdf.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.999.0",
@@ -43,12 +44,14 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@mermaid-js/mermaid-cli": "^11.12.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "md-to-pdf": "^5.2.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

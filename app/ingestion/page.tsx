@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { UploadIcon } from "lucide-react"
+import { UploadIcon, Trash2Icon } from "lucide-react"
 
 export default function FileIngestionPage() {
   const [file, setFile] = React.useState<File | null>(null)
@@ -28,6 +28,7 @@ export default function FileIngestionPage() {
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
   const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
@@ -36,8 +37,12 @@ export default function FileIngestionPage() {
     e.preventDefault()
     setIsDragging(false)
     const f = e.dataTransfer.files?.[0]
-    if (f?.name.endsWith(".csv")) setFile(f)
-    else setStatus({ type: "error", message: "Please upload a CSV file." })
+    if (f?.name.endsWith(".csv")) {
+      setFile(f)
+      setPreviewLeads([])
+      setExcludePreviewIndices([])
+      setPreviewError(null)
+    } else setStatus({ type: "error", message: "Please upload a CSV file." })
   }
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -49,7 +54,12 @@ export default function FileIngestionPage() {
     if (f) setFile(f)
     setStatus(null)
     setPreviewLeads([])
+    setExcludePreviewIndices([])
     setPreviewError(null)
+  }
+
+  const removeLeadFromPreview = (rowIndex: number) => {
+    setExcludePreviewIndices((prev) => [...prev, rowIndex].sort((a, b) => a - b))
   }
 
   const handlePreview = async () => {
@@ -57,6 +67,7 @@ export default function FileIngestionPage() {
     setPreviewLoading(true)
     setPreviewError(null)
     setPreviewLeads([])
+    setExcludePreviewIndices([])
     try {
       const formData = new FormData()
       formData.append("file", file)
@@ -194,7 +205,7 @@ export default function FileIngestionPage() {
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
                 <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
                 <p className="text-xs text-muted-foreground">
-                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed.
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want to upload.
                 </p>
                 <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
                   <table className="w-full text-xs border-collapse">
@@ -203,19 +214,38 @@ export default function FileIngestionPage() {
                         <th className="text-left p-2 font-medium">Enrich_person</th>
                         <th className="text-left p-2 font-medium">A Email</th>
                         <th className="text-left p-2 font-medium">LinkedIn</th>
+                        <th className="w-8 p-2" aria-label="Remove" />
                       </tr>
                     </thead>
                     <tbody>
-                      {previewLeads.map((row, i) => (
-                        <tr key={i} className="border-t border-border">
-                          <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
-                          <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
-                          <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
-                        </tr>
-                      ))}
+                      {previewLeads
+                        .map((row, i) => ({ row, i }))
+                        .filter(({ i }) => !excludePreviewIndices.includes(i))
+                        .map(({ row, i }) => (
+                          <tr key={i} className="border-t border-border">
+                            <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
+                            <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
+                            <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                            <td className="p-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                onClick={() => removeLeadFromPreview(i)}
+                                title="Remove this row from preview"
+                              >
+                                <Trash2Icon className="h-3.5 w-3.5" />
+                              </Button>
+                            </td>
+                          </tr>
+                        ))}
                     </tbody>
                   </table>
                 </div>
+                {excludePreviewIndices.length > 0 && (
+                  <p className="text-xs text-muted-foreground">{excludePreviewIndices.length} row(s) excluded. Re-run Preview to reset.</p>
+                )}
               </div>
             )}
 

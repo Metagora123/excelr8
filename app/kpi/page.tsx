@@ -180,7 +180,7 @@ export default function KPIDashboardPage() {
                 </Card>
                 <Card>
                   <CardHeader className="pb-2">
-                    <CardDescription>To be messaged</CardDescription>
+                    <CardDescription title="Leads where invite step failed (profile/send error)">Invite failed</CardDescription>
                     <CardTitle className="flex items-center gap-2">
                       <SendIcon className="h-4 w-4" />
                       {totals.automation_to_be_messaged.toLocaleString()}
@@ -317,7 +317,7 @@ export default function KPIDashboardPage() {
                   )}
                 </div>
                 <div>
-                  <p className="text-xs text-muted-foreground">To be messaged</p>
+                  <p className="text-xs text-muted-foreground" title="Invite step failed">Invite failed</p>
                   <p className="text-lg font-semibold">{(selectedCampaign.automation_to_be_messaged ?? 0).toLocaleString()}</p>
                   <p className="text-xs text-muted-foreground">in_app_campaign_automations</p>
                 </div>

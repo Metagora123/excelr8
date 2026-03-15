@@ -45,3 +45,6 @@ next-env.d.ts
 
 # HubSpot config file
 hubspot.config.yml
+
+# Generated client-docs PDFs (run npm run docs:pdf to regenerate)
+/client-docs/output/

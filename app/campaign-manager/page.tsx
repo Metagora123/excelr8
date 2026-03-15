@@ -123,6 +123,7 @@ export default function CampaignManagerPage() {
       skipCount: number
       logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>
     }
+    onDemandEnrichment?: { sent: boolean; errors: string[] }
   } | null>(null)
   const [enrichmentLogs, setEnrichmentLogs] = React.useState<Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>>([])
   const [rollback, setRollback] = React.useState<{
@@ -284,12 +285,14 @@ export default function CampaignManagerPage() {
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
         setInlineError(data.error || res.statusText || "Request failed")
+        setInlineLoading(false)
         return
       }
       const reader = res.body?.getReader()
       const decoder = new TextDecoder()
       if (!reader) {
         setInlineError("No response body")
+        setInlineLoading(false)
         return
       }
       let buffer = ""
@@ -322,7 +325,11 @@ export default function CampaignManagerPage() {
               })
             }
             if (obj.error != null) {
-              setInlineError(String(obj.error) + (obj.detail ? `: ${obj.detail}` : ""))
+              let msg = String(obj.error) + (obj.detail ? `: ${obj.detail}` : "")
+              if (excludePreviewIndices.length > 0 && /no valid leads|0 lead/i.test(msg)) {
+                msg += " You excluded rows from the preview; if all CSV rows were excluded, add fewer exclusions or re-run Preview to reset."
+              }
+              setInlineError(msg)
             }
             if (obj.campaignId != null) {
               setInlineResult((prev) => ({
@@ -339,6 +346,10 @@ export default function CampaignManagerPage() {
                   obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
                     ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
                     : prev?.enrichmentSummary,
+                onDemandEnrichment:
+                  obj.onDemandEnrichment != null && typeof obj.onDemandEnrichment === "object"
+                    ? (obj.onDemandEnrichment as { sent: boolean; errors: string[] })
+                    : prev?.onDemandEnrichment,
               }))
             }
             if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
@@ -570,7 +581,7 @@ export default function CampaignManagerPage() {
           <CardHeader>
             <CardTitle>Create Campaign In-App</CardTitle>
             <CardDescription>
-              Use the form above (Supabase project, campaign name, client, category, managed by, CSV). Creates campaign in Supabase, upserts leads, fills lead–campaign links, creates Airtable tables, and duplicates n8n workflows. Checkpoints update as each step completes.
+              Use the form above (Supabase project, campaign name, client, category, managed by, CSV). Creates campaign in Supabase, upserts leads, fills lead–campaign links, creates Airtable tables, and duplicates n8n workflows. Checkpoints update as each step completes. When leads &gt; 25, enrichment runs via the on-demand n8n flow instead of in-app (to avoid timeout).
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
@@ -675,7 +686,12 @@ export default function CampaignManagerPage() {
                   </table>
                 </div>
                 {excludePreviewIndices.length > 0 && (
-                  <p className="text-xs text-muted-foreground">{excludePreviewIndices.length} row(s) excluded from campaign. Re-run Preview to reset.</p>
+                  <>
+                    <p className="text-xs text-muted-foreground">{excludePreviewIndices.length} row(s) excluded from campaign. Re-run Preview to reset.</p>
+                    {excludePreviewIndices.length >= previewLeads.length && previewLeads.length > 0 && (
+                      <p className="text-xs text-amber-600 dark:text-amber-400">You’ve excluded every visible row. If your CSV has no other rows, Create will fail with &quot;No valid leads&quot;.</p>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -713,10 +729,30 @@ export default function CampaignManagerPage() {
                 {inlineResult.leadsCount != null && (
                   <p>Leads: {inlineResult.leadsCount}</p>
                 )}
-                {(inlineResult.enrichmentSummary || enrichmentLogs.length > 0) && (
+                {(inlineResult.enrichmentSummary || inlineResult.onDemandEnrichment || enrichmentLogs.length > 0) && (
                   <div className="rounded border border-border/50 bg-muted/20 p-2 space-y-1">
                     <p className="font-medium text-muted-foreground">Enrichment</p>
-                    {inlineResult.enrichmentSummary ? (
+                    {inlineResult.onDemandEnrichment ? (
+                      <>
+                        <p className="text-xs">
+                          {inlineResult.onDemandEnrichment.sent ? (
+                            <span className="text-green-600 dark:text-green-400">Sent to on-demand n8n flow</span>
+                          ) : (
+                            <span className="text-destructive">On-demand n8n trigger failed</span>
+                          )}
+                          {inlineResult.onDemandEnrichment.errors.length > 0 && (
+                            <span className="text-muted-foreground ml-2">({inlineResult.onDemandEnrichment.errors.length} error(s))</span>
+                          )}
+                        </p>
+                        {inlineResult.onDemandEnrichment.errors.length > 0 && (
+                          <ul className="text-xs text-muted-foreground list-disc list-inside max-h-20 overflow-y-auto">
+                            {inlineResult.onDemandEnrichment.errors.map((err, i) => (
+                              <li key={i}>{err}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
+                    ) : inlineResult.enrichmentSummary ? (
                       <>
                         <p className="text-xs">
                           <span className="text-green-600 dark:text-green-400">{inlineResult.enrichmentSummary.enrichedCount} enriched</span>
@@ -745,11 +781,11 @@ export default function CampaignManagerPage() {
                           </details>
                         )}
                       </>
-                    ) : (
+                    ) : enrichmentLogs.length > 0 ? (
                       <p className="text-xs text-muted-foreground">
                         {enrichmentLogs.filter((l) => l.type === "enriched").length} enriched, {enrichmentLogs.filter((l) => l.type === "failed").length} failed, {enrichmentLogs.filter((l) => l.type === "skip").length} skipped (live)
                       </p>
-                    )}
+                    ) : null}
                   </div>
                 )}
                 <div className="grid gap-1">

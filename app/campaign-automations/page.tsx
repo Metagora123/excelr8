@@ -214,7 +214,7 @@ export default function CampaignAutomationsPage() {
           <h2 className="text-lg font-semibold">Campaign Automations</h2>
           <p className="text-muted-foreground text-sm">
             Hitlist automations created from Campaign Manager. Run now, change schedule, or delete.
-            Step-by-step run logs (per lead: fetch → invite / to_be_messaged / rejected) appear under <strong>Logs</strong> for each row.
+            Step-by-step run logs (per lead: fetch → invited / to_be_messaged / rejected) appear under <strong>Logs</strong> for each row.
             <strong>Run now</strong> updates <code className="bg-muted px-1 rounded text-xs">in_app_campaign_automations</code> and <code className="bg-muted px-1 rounded text-xs">campaigns</code> (invites_sent).
             Data is per datasource: <strong>Sales 2k25</strong> and <strong>Prod 2k26</strong> are separate databases with the same schema.
           </p>
@@ -250,8 +250,6 @@ export default function CampaignAutomationsPage() {
                     <TableHead>Campaign</TableHead>
                     <TableHead>Schedule</TableHead>
                     <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Invites</TableHead>
-                    <TableHead className="text-right">To message</TableHead>
                     <TableHead>Last run</TableHead>
                     <TableHead>Campaign table (campaigns)</TableHead>
                     <TableHead>Airtable</TableHead>
@@ -300,15 +298,6 @@ export default function CampaignAutomationsPage() {
                           {a.is_active ? "Active" : "Paused"}
                         </span>
                       </TableCell>
-                      <TableCell className="text-right">
-                        {a.total_invites_sent}
-                        {a.invites_sent_today > 0 && (
-                          <span className="text-muted-foreground text-xs ml-1">
-                            (+{a.invites_sent_today} today)
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">{a.total_to_be_messaged}</TableCell>
                       <TableCell className="text-muted-foreground text-sm">
                         {formatDate(a.last_run_at)}
                         {a.last_run_status && (
@@ -435,7 +424,7 @@ function LogsPreview({
                 </span>
                 {(run.invited_count != null || run.to_be_messaged_count != null || run.rejected_count != null) && (
                   <span className="text-xs text-muted-foreground">
-                    invited: {run.invited_count ?? 0} · to message: {run.to_be_messaged_count ?? 0} · rejected: {run.rejected_count ?? 0}
+                    invited: {run.invited_count ?? 0} · invite failed: {run.to_be_messaged_count ?? 0} · rejected: {run.rejected_count ?? 0}
                   </span>
                 )}
               </div>
