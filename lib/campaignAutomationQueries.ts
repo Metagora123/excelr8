@@ -10,6 +10,7 @@ import {
   fetchUnipileProfileWithDetails,
   sendUnipileInviteWithDetails,
 } from "@/lib/enrichment-engine"
+import { getLeadByProfileUrl, generateOutreachMessages } from "@/lib/outreachMessageGenerator"
 
 /**
  * Campaign automations (in_app_campaign_automations) exist in both databases:
@@ -213,6 +214,33 @@ export async function runCampaignAutomation(
         runEntry.rejected_count += 1
         runEntry.leads.push(leadLog)
         continue
+      }
+
+      // Ensure Message_1/2/3 are generated (from Supabase leads + lead_posts) if not already set
+      const existingMessage1 = (fields.Message_1 ?? fields["Message_1"]) != null && String(fields.Message_1 ?? fields["Message_1"]).trim() !== ""
+      if (!existingMessage1) {
+        try {
+          const lead = await getLeadByProfileUrl(project, linkedinUrl)
+          const gen = await generateOutreachMessages({
+            project,
+            airtableFields: fields,
+            leadId: lead?.id ?? undefined,
+          })
+          if (gen.ok) {
+            await updateAirtableRecord(baseId, token, tableId, rec.id, {
+              Message_1: gen.message_1,
+              Message_2: gen.message_2,
+              Message_3: gen.message_3,
+            })
+            leadLog.messages_generated = true
+          } else {
+            leadLog.messages_generated = false
+            leadLog.messages_error = gen.error
+          }
+        } catch (e) {
+          leadLog.messages_generated = false
+          leadLog.messages_error = e instanceof Error ? e.message : String(e)
+        }
       }
 
       const { identifier } = resolveIdentifierFromProfileUrl(linkedinUrl)
