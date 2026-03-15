@@ -854,6 +854,95 @@ export async function createAutoLikeTable(
   }
 }
 
+/** Build Auto Like table records from lead_posts for a campaign; then append to the given table. */
+export async function appendAutoLikeRecordsFromLeadPosts(
+  project: SupabaseProject,
+  campaignId: string,
+  baseId: string,
+  token: string,
+  tableId: string
+): Promise<{ appended: number }> {
+  const supabase = createClient(project)
+  const { data: lcRows } = await supabase
+    .from("lead_campaigns")
+    .select("lead_id")
+    .eq("campaign_id", campaignId)
+  const leadIds = (lcRows ?? []).map((r) => (r as { lead_id: string }).lead_id).filter(Boolean)
+  if (leadIds.length === 0) return { appended: 0 }
+
+  const { data: posts } = await supabase
+    .from("lead_posts")
+    .select("id, lead_id, linkedin_post_id, content, comments, reactions, post_url, commentators, reactioners, lead_name, lead_company")
+    .in("lead_id", leadIds)
+    .order("created_at", { ascending: false })
+  if (!posts?.length) return { appended: 0 }
+
+  const leadIdsSet = new Set(leadIds)
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("id, profile_url, full_name")
+    .in("id", leadIds)
+  const profileByLeadId = new Map<string | null, string>()
+  const nameByLeadId = new Map<string | null, string>()
+  for (const l of leads ?? []) {
+    const id = (l as { id: string }).id
+    profileByLeadId.set(id, String((l as { profile_url?: string }).profile_url ?? "").trim())
+    nameByLeadId.set(id, String((l as { full_name?: string }).full_name ?? "").trim())
+  }
+
+  const records: Record<string, unknown>[] = []
+  for (const p of posts as Array<{
+    lead_id: string
+    linkedin_post_id?: string
+    content?: string
+    comments?: number
+    reactions?: number
+    post_url?: string
+    commentators?: unknown
+    reactioners?: unknown
+    lead_name?: string
+    lead_company?: string
+  }>) {
+    const leadProfile = profileByLeadId.get(p.lead_id) ?? ""
+    const leadName = (p.lead_name ?? nameByLeadId.get(p.lead_id) ?? "").trim() || "—"
+    const commentators = p.commentators
+    const reactioners = p.reactioners
+    const commentatorsCount = Array.isArray(commentators) ? commentators.length : (typeof p.comments === "number" ? p.comments : 0)
+    const reactionersCount = Array.isArray(reactioners) ? reactioners.length : (typeof p.reactions === "number" ? p.reactions : 0)
+    records.push({
+      lead_name: leadName,
+      lead_profile: leadProfile || "—",
+      tier: "None",
+      score: 0,
+      campaign_id: campaignId,
+      post_content: (p.content ?? "").trim() || "—",
+      "commentators(json)": commentators != null ? JSON.stringify(commentators) : "",
+      "reactioners(json)": reactioners != null ? JSON.stringify(reactioners) : "",
+      commentators_count: commentatorsCount,
+      reactioners_count: reactionersCount,
+      comment_a: "",
+      comment_b: "",
+      comment_c: "",
+      comment_d: "",
+      Reaction: "None",
+      Final_Comment: "None",
+      Confirm_Column: "None",
+      Select_Poster: "None",
+      post_id: (p.linkedin_post_id ?? "").trim() || "—",
+      post_url: (p.post_url ?? "").trim() || "—",
+      Custom_Comment_Data: "",
+      title: "",
+      location: "",
+      expertise: (p.lead_company ?? "").trim() || "",
+      Tags: "",
+      Confirmation_status: "None",
+    })
+  }
+
+  await appendAirtableRecords(baseId, token, tableId, records)
+  return { appended: records.length }
+}
+
 export async function updateCampaignAirtableUrls(
   project: SupabaseProject,
   campaignId: string,

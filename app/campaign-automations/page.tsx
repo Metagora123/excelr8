@@ -58,6 +58,11 @@ type RunLogEntry = {
     unipile_degree?: string
     decision?: string
     error?: string
+    messages_generated?: boolean
+    messages_error?: string
+    message_1?: string
+    message_2?: string
+    message_3?: string
     unipile_profile_status?: number
     unipile_profile_response?: string
     unipile_invite_status?: number
@@ -460,6 +465,12 @@ function LogsPreview({
                       {lead.step != null && <div><span className="text-foreground">Step:</span> {lead.step}</div>}
                       {lead.unipile_degree != null && <div><span className="text-foreground">Degree:</span> {lead.unipile_degree}</div>}
                       {lead.decision != null && <div><span className="text-foreground">Decision:</span> {lead.decision}</div>}
+                      {lead.messages_generated === true && (
+                        <div><span className="text-foreground">Messages:</span> generated</div>
+                      )}
+                      {lead.messages_generated === false && lead.messages_error != null && (
+                        <div><span className="text-foreground">Messages:</span> failed</div>
+                      )}
                       {lead.unipile_profile_status != null && (
                         <div><span className="text-foreground">Unipile profile:</span> HTTP {lead.unipile_profile_status}</div>
                       )}
@@ -467,6 +478,34 @@ function LogsPreview({
                         <div><span className="text-foreground">Unipile invite:</span> HTTP {lead.unipile_invite_status}</div>
                       )}
                     </div>
+                    {(lead.message_1 != null || lead.message_2 != null || lead.message_3 != null) && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Generated outreach messages</summary>
+                        <div className="mt-2 space-y-2">
+                          {lead.message_1 != null && (
+                            <div>
+                              <span className="text-foreground font-medium">Message 1:</span>
+                              <p className="mt-0.5 p-2 rounded bg-muted text-[11px] whitespace-pre-wrap">{lead.message_1}</p>
+                            </div>
+                          )}
+                          {lead.message_2 != null && (
+                            <div>
+                              <span className="text-foreground font-medium">Message 2:</span>
+                              <p className="mt-0.5 p-2 rounded bg-muted text-[11px] whitespace-pre-wrap">{lead.message_2}</p>
+                            </div>
+                          )}
+                          {lead.message_3 != null && (
+                            <div>
+                              <span className="text-foreground font-medium">Message 3:</span>
+                              <p className="mt-0.5 p-2 rounded bg-muted text-[11px] whitespace-pre-wrap">{lead.message_3}</p>
+                            </div>
+                          )}
+                        </div>
+                      </details>
+                    )}
+                    {lead.messages_error != null && (
+                      <div className="text-amber-600 dark:text-amber-400 text-xs">Messages error: {lead.messages_error}</div>
+                    )}
                     {lead.error != null && (
                       <div className="text-destructive font-medium">{lead.error}</div>
                     )}

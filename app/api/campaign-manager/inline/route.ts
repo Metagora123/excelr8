@@ -7,6 +7,7 @@ import {
   upsertLeadsAndFillLeadCampaigns,
   createHitlistTableAndAppendLeads,
   createAutoLikeTable,
+  appendAutoLikeRecordsFromLeadPosts,
   duplicateN8nWorkflow,
   updateCampaignAirtableUrls,
   updateCampaignLeadCount,
@@ -209,6 +210,17 @@ export async function POST(req: Request) {
               schemaSource: result.schemaSource,
               schemaError: result.schemaError,
               fields: result.fields,
+            })
+            const { appended: autoLikeAppended } = await appendAutoLikeRecordsFromLeadPosts(
+              project,
+              campaignId,
+              airtableBaseId,
+              airtableToken,
+              result.tableId
+            )
+            streamLine(controller, {
+              checkpoint: "airtable_auto_like_table_created" as Checkpoint,
+              autoLikeRowsAppended: autoLikeAppended,
             })
           } catch (e) {
             const detail = e instanceof Error ? e.message : String(e)

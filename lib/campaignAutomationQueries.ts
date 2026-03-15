@@ -233,6 +233,9 @@ export async function runCampaignAutomation(
               Message_3: gen.message_3,
             })
             leadLog.messages_generated = true
+            leadLog.message_1 = gen.message_1
+            leadLog.message_2 = gen.message_2
+            leadLog.message_3 = gen.message_3
           } else {
             leadLog.messages_generated = false
             leadLog.messages_error = gen.error
