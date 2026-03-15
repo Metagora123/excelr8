@@ -195,7 +195,7 @@ From `package.json`:
 - `npm run check:deploy` – lint + typecheck + build.
 - `npm run check:campaign-env` / `check:campaign-env:live` – validate env + external services for Campaign Manager.
 - `npm run test:airtable-campaign-tables` – dry‑run creation of hitlist + auto‑like Airtable tables.
-- `npm run hubspot:test` – test HubSpot API key.
+- `npm run hubspot:test` – test HubSpot API key
 
 Some of these hit real external services (Airtable, HubSpot, SendGrid), so prefer running them against non‑production credentials first.
 
