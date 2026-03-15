@@ -12,6 +12,7 @@ import {
   updateCampaignAirtableUrls,
   updateCampaignLeadCount,
   createCampaignAutomationRow,
+  createAutoCommentAutomationRow,
   triggerOnDemandEnrichment,
 } from "@/lib/campaign-manager-inline"
 import { runEnrichmentForCampaign } from "@/lib/enrichment-engine"
@@ -363,6 +364,21 @@ export async function POST(req: Request) {
             console.error("[inline] Campaign automation row failed:", detail)
             streamLine(controller, {
               error: "Campaign automation row failed (ensure in_app_campaign_automations table exists)",
+              detail,
+            })
+          }
+        }
+
+        // 10b) In-app Auto Comment automation row (when Auto Like table exists – generate 4 comments per post)
+        if (airtableAutoLikeTableId && airtableBaseId) {
+          try {
+            await createAutoCommentAutomationRow(project, campaignId, airtableBaseId, airtableAutoLikeTableId)
+            streamLine(controller, { auto_comment_automation_created: true })
+          } catch (e) {
+            const detail = e instanceof Error ? e.message : String(e)
+            console.error("[inline] Auto Comment automation row failed:", detail)
+            streamLine(controller, {
+              error: "Auto Comment automation row failed (ensure in_app_auto_comment_automations table exists)",
               detail,
             })
           }

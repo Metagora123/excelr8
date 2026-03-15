@@ -93,6 +93,28 @@ type AutomationRow = {
   campaign_likes_reactions?: number | null
 }
 
+type AutoCommentRunLog = {
+  run_date?: string
+  started_at?: string
+  finished_at?: string
+  status?: string
+  processed_count?: number
+  failed_count?: number
+  records?: Array<{ record_id?: string; lead_name?: string; post_content_preview?: string; error?: string }>
+}
+
+type AutoCommentRow = {
+  id: string
+  campaign_id: string
+  campaign_name?: string | null
+  airtable_base_id: string
+  airtable_table_id: string
+  is_active: boolean
+  last_run_at: string | null
+  last_run_status: string | null
+  run_logs: AutoCommentRunLog[]
+}
+
 export default function CampaignAutomationsPage() {
   const [automations, setAutomations] = React.useState<AutomationRow[]>([])
   const [loading, setLoading] = React.useState(true)
@@ -101,6 +123,10 @@ export default function CampaignAutomationsPage() {
   const [updatingScheduleId, setUpdatingScheduleId] = React.useState<string | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [runSuccessId, setRunSuccessId] = React.useState<string | null>(null)
+  const [autoCommentAutomations, setAutoCommentAutomations] = React.useState<AutoCommentRow[]>([])
+  const [autoCommentLoading, setAutoCommentLoading] = React.useState(true)
+  const [autoCommentRunningId, setAutoCommentRunningId] = React.useState<string | null>(null)
+  const [autoCommentSuccessId, setAutoCommentSuccessId] = React.useState<string | null>(null)
   const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
@@ -123,6 +149,27 @@ export default function CampaignAutomationsPage() {
       setLoading(false)
     }
   }, [project])
+
+  const loadAutoComment = React.useCallback(async () => {
+    setAutoCommentLoading(true)
+    try {
+      const res = await fetch(`/api/auto-comment-automations?project=${encodeURIComponent(project)}`)
+      if (res.ok) {
+        const data = await res.json()
+        setAutoCommentAutomations(Array.isArray(data) ? data : [])
+      } else {
+        setAutoCommentAutomations([])
+      }
+    } catch {
+      setAutoCommentAutomations([])
+    } finally {
+      setAutoCommentLoading(false)
+    }
+  }, [project])
+
+  React.useEffect(() => {
+    loadAutoComment()
+  }, [loadAutoComment])
 
   React.useEffect(() => {
     load()
@@ -171,6 +218,30 @@ export default function CampaignAutomationsPage() {
       setError(e instanceof Error ? e.message : "Run failed")
     } finally {
       setRunningId(null)
+    }
+  }
+
+  const handleAutoCommentRunNow = async (id: string) => {
+    setAutoCommentRunningId(id)
+    setError(null)
+    setAutoCommentSuccessId(null)
+    try {
+      const res = await fetch(
+        `/api/auto-comment-automations/${encodeURIComponent(id)}/run?project=${encodeURIComponent(project)}`,
+        { method: "POST" }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(data.error || res.statusText || "Run failed")
+        return
+      }
+      await loadAutoComment()
+      setAutoCommentSuccessId(id)
+      setTimeout(() => setAutoCommentSuccessId(null), 5000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Run failed")
+    } finally {
+      setAutoCommentRunningId(null)
     }
   }
 
@@ -367,8 +438,189 @@ export default function CampaignAutomationsPage() {
             )}
           </CardContent>
         </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Auto Comment automations</CardTitle>
+            <CardDescription>
+              One row per campaign with an Auto Like Airtable table. Run now generates 4 comments (A–D) per post from <code className="bg-muted px-1 rounded text-xs">post_content</code> and writes <code className="bg-muted px-1 rounded text-xs">comment_a</code>–<code className="bg-muted px-1 rounded text-xs">comment_d</code> to Airtable. Rows that already have all four <code className="bg-muted px-1 rounded text-xs">comment_a</code>–<code className="bg-muted px-1 rounded text-xs">comment_d</code> are skipped.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {autoCommentLoading ? (
+              <p className="text-muted-foreground text-sm">Loading…</p>
+            ) : autoCommentAutomations.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No Auto Comment automations yet. Create a campaign in Campaign Manager with &quot;Auto Like / Auto Comment&quot; checked to get an Auto Like table and this automation.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Campaign</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last run</TableHead>
+                    <TableHead>Airtable</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {autoCommentAutomations.map((a) => (
+                    <TableRow key={a.id}>
+                      <TableCell className="font-medium">
+                        {a.campaign_name ?? a.campaign_id.slice(0, 8) + "…"}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={
+                            a.is_active
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-muted-foreground"
+                          }
+                        >
+                          {a.is_active ? "Active" : "Paused"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {formatDate(a.last_run_at)}
+                        {a.last_run_status && (
+                          <span className="ml-1 text-xs">({a.last_run_status})</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <a
+                          href={airtableUrl(a.airtable_base_id, a.airtable_table_id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline text-sm"
+                        >
+                          Open <ExternalLinkIcon className="h-3 w-3" />
+                        </a>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 justify-end flex-wrap">
+                          {autoCommentSuccessId === a.id && (
+                            <span className="text-xs text-green-600 dark:text-green-400 mr-1">Run finished — see Logs</span>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8"
+                            disabled={autoCommentRunningId === a.id}
+                            onClick={() => handleAutoCommentRunNow(a.id)}
+                          >
+                            <PlayIcon className="h-3.5 w-3 mr-1" />
+                            {autoCommentRunningId === a.id ? "Running…" : "Run now"}
+                          </Button>
+                          <Sheet>
+                            <SheetTrigger asChild>
+                              <Button variant="outline" size="sm" className="h-8">
+                                <FileTextIcon className="h-3.5 w-3 mr-1" />
+                                Logs
+                              </Button>
+                            </SheetTrigger>
+                            <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+                              <SheetHeader>
+                                <SheetTitle>Auto Comment run logs – {a.campaign_name ?? a.campaign_id.slice(0, 8)}</SheetTitle>
+                              </SheetHeader>
+                              <AutoCommentLogsPreview runLogs={a.run_logs} formatDate={formatDate} />
+                            </SheetContent>
+                          </Sheet>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </AppShell>
+  )
+}
+
+function AutoCommentLogsPreview({
+  runLogs,
+  formatDate,
+}: {
+  runLogs: AutoCommentRunLog[]
+  formatDate: (s: string | null | undefined) => string
+}) {
+  const [expandedIndex, setExpandedIndex] = React.useState<number | null>(null)
+  const runs = Array.isArray(runLogs) ? runLogs : []
+
+  if (runs.length === 0) {
+    return (
+      <p className="text-muted-foreground text-sm py-4">No runs yet. Use &quot;Run now&quot; to generate comments.</p>
+    )
+  }
+
+  return (
+    <div className="space-y-3 py-4">
+      {runs.slice().reverse().map((run, idx) => {
+        const i = runs.length - 1 - idx
+        const isExpanded = expandedIndex === i
+        const records = Array.isArray(run.records) ? run.records : []
+        return (
+          <div
+            key={i}
+            className="rounded-lg border bg-muted/20 overflow-hidden"
+          >
+            <button
+              type="button"
+              className="w-full px-3 py-2.5 text-left flex items-center justify-between gap-2 hover:bg-muted/40 transition-colors"
+              onClick={() => setExpandedIndex(isExpanded ? null : i)}
+            >
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                <span className="font-medium">
+                  {run.run_date ?? formatDate(run.started_at) ?? `Run ${i + 1}`}
+                </span>
+                <span className="text-muted-foreground text-xs">
+                  {formatDate(run.started_at)} → {formatDate(run.finished_at)}
+                </span>
+                <span
+                  className={
+                    run.status === "success"
+                      ? "text-green-600 dark:text-green-400"
+                      : run.status === "error"
+                        ? "text-destructive"
+                        : "text-muted-foreground"
+                  }
+                >
+                  {run.status ?? "—"}
+                </span>
+                {(run.processed_count != null || run.failed_count != null) && (
+                  <span className="text-xs text-muted-foreground">
+                    processed: {run.processed_count ?? 0} · failed: {run.failed_count ?? 0}
+                  </span>
+                )}
+              </div>
+              <span className="text-muted-foreground text-xs shrink-0">
+                {records.length} row{records.length !== 1 ? "s" : ""} {isExpanded ? "▼" : "▶"}
+              </span>
+            </button>
+            {isExpanded && records.length > 0 && (
+              <div className="border-t bg-background/50 px-3 py-2 space-y-2 max-h-[420px] overflow-y-auto">
+                {records.map((rec, j) => (
+                  <div key={j} className="text-xs rounded border p-3 space-y-1">
+                    {rec.lead_name != null && <div className="font-medium">{rec.lead_name}</div>}
+                    {rec.post_content_preview != null && (
+                      <div className="text-muted-foreground truncate" title={rec.post_content_preview}>
+                        {rec.post_content_preview}
+                      </div>
+                    )}
+                    {rec.error != null && (
+                      <div className="text-destructive">{rec.error}</div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
   )
 }
 

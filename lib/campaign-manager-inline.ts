@@ -988,6 +988,23 @@ export async function createCampaignAutomationRow(
   if (error) throw new Error(`in_app_campaign_automations insert: ${error.message}`)
 }
 
+/** Create in_app_auto_comment_automations row when Auto Like table is created (generate 4 comments per post). */
+export async function createAutoCommentAutomationRow(
+  project: SupabaseProject,
+  campaignId: string,
+  airtableBaseId: string,
+  airtableTableId: string
+): Promise<void> {
+  const supabase = createClient(project)
+  const { error } = await supabase.from("in_app_auto_comment_automations").insert({
+    campaign_id: campaignId,
+    airtable_base_id: airtableBaseId,
+    airtable_table_id: airtableTableId,
+    is_active: true,
+  })
+  if (error) throw new Error(`in_app_auto_comment_automations insert: ${error.message}`)
+}
+
 export async function duplicateN8nWorkflow(
   workflowId: string,
   newName: string

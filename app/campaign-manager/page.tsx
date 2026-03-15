@@ -46,7 +46,7 @@ function getAutoLikeButtonFormula(project: "sales2k25" | "prod2k26"): string {
 
 function getHitlistButtonFormula(project: "sales2k25" | "prod2k26"): string {
   const suffix = getWebhookSuffix(project)
-  return `"https://n8n.srv1123126.hstgr.cloud/webhook-test/confirm-hitlist${suffix}"
+  return `"https://n8n.srv1123126.hstgr.cloud/webhook/confirm-hitlist${suffix}"
 & "?record_id=" & RECORD_ID()
 & "&campaign_id=" & ENCODE_URL_COMPONENT({campaign_id})
 & "&message_1=" & ENCODE_URL_COMPONENT({Message_1})
