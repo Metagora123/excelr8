@@ -31,6 +31,7 @@ function getAutoLikeButtonFormula(project: "sales2k25" | "prod2k26"): string {
 & "?post_id=" & {post_id}
 
 & "&record_id=" & RECORD_ID()
+& "&campaign_id=" & ENCODE_URL_COMPONENT({campaign_id})
 & "&comment_a=" & ENCODE_URL_COMPONENT({comment_a})
 & "&comment_b=" & ENCODE_URL_COMPONENT({comment_b})
 & "&comment_c=" & ENCODE_URL_COMPONENT({comment_c})
@@ -124,6 +125,7 @@ export default function CampaignManagerPage() {
       logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>
     }
     onDemandEnrichment?: { sent: boolean; errors: string[] }
+    autoLikeZeroRowsMessage?: string
   } | null>(null)
   const [enrichmentLogs, setEnrichmentLogs] = React.useState<Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>>([])
   const [rollback, setRollback] = React.useState<{
@@ -317,6 +319,9 @@ export default function CampaignManagerPage() {
                 fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
               })
             }
+            if (typeof obj.autoLikeZeroRowsMessage === "string") {
+              setInlineResult((prev) => (prev ? { ...prev, autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string } : { campaignId: "", autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }))
+            }
             if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
               setHitlistSchema({
                 schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
@@ -388,6 +393,9 @@ export default function CampaignManagerPage() {
               schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
               fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
             })
+          }
+          if (typeof obj.autoLikeZeroRowsMessage === "string") {
+            setInlineResult((prev) => (prev ? { ...prev, autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string } : { campaignId: "", autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }))
           }
           if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
             setHitlistSchema({
@@ -814,26 +822,33 @@ export default function CampaignManagerPage() {
                     </div>
                   )}
                   {inlineResult.airtableAutoLikeUrl && (
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={inlineResult.airtableAutoLikeUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="text-primary underline"
-                      >
-                        Airtable Auto Like table
-                      </a>
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        className="h-6 px-2 text-[11px]"
-                        onClick={() => {
-                          void navigator.clipboard?.writeText(inlineResult.airtableAutoLikeUrl as string)
-                        }}
-                      >
-                        Copy URL
-                      </Button>
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={inlineResult.airtableAutoLikeUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-primary underline"
+                        >
+                          Airtable Auto Like table
+                        </a>
+                        <Button
+                          type="button"
+                          size="xs"
+                          variant="outline"
+                          className="h-6 px-2 text-[11px]"
+                          onClick={() => {
+                            void navigator.clipboard?.writeText(inlineResult.airtableAutoLikeUrl as string)
+                          }}
+                        >
+                          Copy URL
+                        </Button>
+                      </div>
+                      {inlineResult.autoLikeZeroRowsMessage && (
+                        <p className="text-xs text-muted-foreground">
+                          {inlineResult.autoLikeZeroRowsMessage}
+                        </p>
+                      )}
                     </div>
                   )}
                   {inlineResult.n8nHitlistWorkflowUrl && (
@@ -991,6 +1006,11 @@ export default function CampaignManagerPage() {
                         <span className="block mt-1 text-amber-600 dark:text-amber-400">
                           Airtable schema 403 or error — using static fallback: {hitlistSchema.schemaError.slice(0, 120)}
                           {hitlistSchema.schemaError.length > 120 ? "…" : ""}
+                          {/403|INVALID_PERMISSIONS/i.test(hitlistSchema.schemaError) && (
+                            <span className="block mt-1 text-xs">
+                              Table creation may still succeed. If it fails, check token scope and workspace role — see <code className="bg-muted px-0.5 rounded">docs/CAMPAIGN-MANAGER-AIRTABLE-ENV.md</code>.
+                            </span>
+                          )}
                         </span>
                       )}
                     </p>
@@ -1023,6 +1043,11 @@ export default function CampaignManagerPage() {
                         <span className="block mt-1 text-amber-600 dark:text-amber-400">
                           Airtable schema 403 or error — using static fallback: {autoLikeSchema.schemaError.slice(0, 120)}
                           {autoLikeSchema.schemaError.length > 120 ? "…" : ""}
+                          {/403|INVALID_PERMISSIONS/i.test(autoLikeSchema.schemaError) && (
+                            <span className="block mt-1 text-xs">
+                              Table creation may still succeed. If it fails, check token scope and workspace role — see <code className="bg-muted px-0.5 rounded">docs/CAMPAIGN-MANAGER-AIRTABLE-ENV.md</code>.
+                            </span>
+                          )}
                         </span>
                       )}
                     </p>

@@ -230,7 +230,7 @@ export async function POST(req: Request) {
               schemaError: result.schemaError,
               fields: result.fields,
             })
-            const { appended: autoLikeAppended } = await appendAutoLikeRecordsFromLeadPosts(
+            const { appended: autoLikeAppended, removedEmptyRow } = await appendAutoLikeRecordsFromLeadPosts(
               project,
               campaignId,
               airtableBaseId,
@@ -240,6 +240,11 @@ export async function POST(req: Request) {
             streamLine(controller, {
               checkpoint: "airtable_auto_like_table_created" as Checkpoint,
               autoLikeRowsAppended: autoLikeAppended,
+              autoLikeRemovedEmptyRow: removedEmptyRow,
+              autoLikeZeroRowsMessage:
+                autoLikeAppended === 0
+                  ? "0 rows appended (no lead_posts yet—enrichment may still be running or on-demand). Rows will appear when enrichment fills lead_posts; you can run Auto Comment automation then."
+                  : undefined,
             })
           } catch (e) {
             const detail = e instanceof Error ? e.message : String(e)

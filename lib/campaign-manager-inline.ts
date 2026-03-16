@@ -536,9 +536,14 @@ export async function createAirtableTable(
   })
   if (!res.ok) {
     const t = await res.text()
-    const msg = `Airtable create table: ${res.status} ${t}`
+    const msg =
+      res.status === 403
+        ? `Airtable create table: 403 — token may lack schema.bases:write or base may be in a workspace where you're not owner. See docs/CAMPAIGN-MANAGER-AIRTABLE-ENV.md. Raw: ${t.slice(0, 200)}`
+        : `Airtable create table: ${res.status} ${t}`
     if (res.status === 404) {
       console.error("[Airtable] 404 NOT_FOUND creating table. Check AIRTABLE_BASE_ID: base may not exist, be deleted, or you may not have access.", { baseId: baseId.slice(0, 6) + "…", tableName, status: res.status, body: t })
+    } else if (res.status === 403) {
+      console.error("[Airtable] 403 creating table. Check token scope (schema.bases:read, schema.bases:write) and workspace role (owner/creator).", { baseId: baseId.slice(0, 6) + "…", tableName })
     } else {
       console.error("[Airtable] create table failed", { baseId: baseId.slice(0, 6) + "…", tableName, status: res.status, body: t })
     }
@@ -725,6 +730,24 @@ export async function listAirtableRecords(
     offset = data.offset
   } while (offset)
   return out
+}
+
+/** Delete up to 10 Airtable records by id. */
+export async function deleteAirtableRecords(
+  baseId: string,
+  token: string,
+  tableId: string,
+  recordIds: string[]
+): Promise<void> {
+  if (recordIds.length === 0) return
+  const ids = recordIds.slice(0, 10)
+  const url = new URL(`https://api.airtable.com/v0/${baseId}/${tableId}`)
+  ids.forEach((id) => url.searchParams.append("records[]", id))
+  const res = await fetch(url.toString(), { method: "DELETE", headers: { Authorization: `Bearer ${token}` } })
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(`Airtable delete: ${res.status} ${t}`)
+  }
 }
 
 /** Update one Airtable record by id (partial fields update). */
@@ -940,7 +963,27 @@ export async function appendAutoLikeRecordsFromLeadPosts(
   }
 
   await appendAirtableRecords(baseId, token, tableId, records)
-  return { appended: records.length }
+  const appended = records.length
+  let removedEmptyRow = false
+  // When no rows were appended (e.g. lead_posts empty because enrichment is on-demand), remove Airtable's default empty row so the table doesn't show one blank row.
+  if (appended === 0) {
+    try {
+      const existing = await listAirtableRecords(baseId, token, tableId, { pageSize: 1 })
+      if (existing.length === 1) {
+        const fields = existing[0].fields as Record<string, unknown>
+        const hasAnyValue = Object.values(fields).some(
+          (v) => v != null && String(v).trim() !== ""
+        )
+        if (!hasAnyValue) {
+          await deleteAirtableRecords(baseId, token, tableId, [existing[0].id])
+          removedEmptyRow = true
+        }
+      }
+    } catch {
+      // Non-fatal: leave the empty row if delete fails (e.g. permissions)
+    }
+  }
+  return { appended, removedEmptyRow }
 }
 
 export async function updateCampaignAirtableUrls(
