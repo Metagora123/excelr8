@@ -884,21 +884,21 @@ export async function appendAutoLikeRecordsFromLeadPosts(
   baseId: string,
   token: string,
   tableId: string
-): Promise<{ appended: number }> {
+): Promise<{ appended: number; removedEmptyRow: boolean }> {
   const supabase = createClient(project)
   const { data: lcRows } = await supabase
     .from("lead_campaigns")
     .select("lead_id")
     .eq("campaign_id", campaignId)
   const leadIds = (lcRows ?? []).map((r) => (r as { lead_id: string }).lead_id).filter(Boolean)
-  if (leadIds.length === 0) return { appended: 0 }
+  if (leadIds.length === 0) return { appended: 0, removedEmptyRow: false }
 
   const { data: posts } = await supabase
     .from("lead_posts")
     .select("id, lead_id, linkedin_post_id, content, comments, reactions, post_url, commentators, reactioners, lead_name, lead_company")
     .in("lead_id", leadIds)
     .order("created_at", { ascending: false })
-  if (!posts?.length) return { appended: 0 }
+  if (!posts?.length) return { appended: 0, removedEmptyRow: false }
 
   const leadIdsSet = new Set(leadIds)
   const { data: leads } = await supabase
