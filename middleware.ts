@@ -29,5 +29,18 @@ export function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/", "/dashboard", "/dashboard/:path*", "/ingestion", "/dossiers", "/radar", "/campaign-manager", "/kpi", "/newsletter", "/hubspot", "/login"],
+  matcher: [
+    "/",
+    "/dashboard",
+    "/dashboard/:path*",
+    "/ingestion",
+    "/dossiers",
+    "/radar",
+    "/radar-logging",
+    "/campaign-manager",
+    "/kpi",
+    "/newsletter",
+    "/hubspot",
+    "/login",
+  ],
 }
