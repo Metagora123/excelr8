@@ -179,7 +179,7 @@ export async function POST(req: Request) {
                       },
                     ],
                     generationConfig: {
-                      responseMimeType: "image/png",
+                      responseModalities: ["IMAGE"],
                     },
                   }),
                 }
@@ -194,8 +194,9 @@ export async function POST(req: Request) {
                   content?: { parts?: Array<{ inlineData?: { data?: string; mimeType?: string } }> }
                 }>
               }
-              const inlineData =
-                geminiJson.candidates?.[0]?.content?.parts?.[0]?.inlineData
+              const inlineData = (geminiJson.candidates ?? [])
+                .flatMap((candidate) => candidate.content?.parts ?? [])
+                .find((part) => part.inlineData?.data)?.inlineData
               const b64data = inlineData?.data as string | undefined
               const mimeType =
                 (inlineData?.mimeType as string | undefined) || "image/png"
