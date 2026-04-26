@@ -76,11 +76,16 @@ export async function getR2ObjectBody(key: string): Promise<string> {
 }
 
 /**
- * Filter keys to markdown only (.md or .md.temp).
+ * Filter keys to supported newsletter source documents.
+ * Accept markdown and html variants (including *.temp files).
  */
 export function filterMarkdownKeys(keys: string[]): string[] {
   return keys.filter(
-    (k) => k.endsWith(".md") || k.endsWith(".md.temp")
+    (k) =>
+      k.endsWith(".md") ||
+      k.endsWith(".md.temp") ||
+      k.endsWith(".html") ||
+      k.endsWith(".html.temp")
   )
 }
 

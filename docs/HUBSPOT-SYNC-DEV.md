@@ -16,7 +16,7 @@ Quick reference for how Excelr8 dashboard maps Supabase data to HubSpot. Use thi
 
 | Supabase | HubSpot | Notes |
 |----------|---------|--------|
-| `leads` | **Contacts** | Create/update by email |
+| `leads` | **Contacts** | Create/update by email when present; otherwise by profile URL |
 | `campaigns` | **Deals** | Create/update by deal name |
 | `lead_campaigns` | **Contact–Deal associations** | Links contact to deal |
 | Lead `dossier_url` | **Note** on contact | One note per lead with dossier |
@@ -32,16 +32,18 @@ Quick reference for how Excelr8 dashboard maps Supabase data to HubSpot. Use thi
 | Supabase field | HubSpot property | Notes |
 |----------------|------------------|--------|
 | `full_name` (or `name`) | `firstname` / `lastname` | Split on first space |
-| `email` | `email` | Required for search; placeholder if missing |
+| `email` | `email` | Optional; only sent when non-empty |
 | `company_name` | `company` | |
 | `title` | `jobtitle` | |
 | `phone` | `phone` | |
 | `location` | `address` | |
 | `status` | `hs_lead_status` | e.g. new, qualified, messaged |
-| `profile_url` | `hs_linkedinbid` | LinkedIn URL |
+| `profile_url` | `excelr8_profile_url` (custom) | LinkedIn URL, used for fallback search and dedupe |
 | `about_summary` | `linkedinbio` | Truncated to 65k chars |
 
-**Logic:** Search contact by email. If found → PATCH. If not → POST. No email → use placeholder `lead-{id}@excelr8.placeholder`.
+**Current required gate (sync route):** A lead is skipped unless both `name` and `profile_url` are non-empty.
+
+**Logic:** Search contact by email first (when email exists). If not found (or no email), search by `excelr8_profile_url` when available. If found → PATCH. If not → POST. No placeholder email is generated.
 
 **Code:** `lib/hubspot.ts` → `upsertContact`, `findContactByEmail`. Sync route maps via `leadToHubSpot()` in `app/api/hubspot/sync/route.ts`.
 

@@ -15,6 +15,8 @@ The **HubSpot Export** feature copies your Excelr8 data into HubSpot so you can:
 
 **Important:** Excelr8 (Supabase) stays the source of truth. HubSpot is a snapshot for viewing and reporting. When you run sync again, existing contacts and deals are updated; we don’t create duplicates.
 
+**Contact sync requirement:** a lead must have both a name and a LinkedIn profile URL to sync as a contact.
+
 ---
 
 ## What Shows Up Where in HubSpot
@@ -114,7 +116,7 @@ Right now we use **one HubSpot portal** and one token. All synced data goes to t
 
 ## If Something’s Missing in HubSpot
 
-- **Contact not there or not updated:** Make sure that lead exists in Excelr8 and has at least an email (or we’ll use a placeholder). Then run sync again.
+- **Contact not there or not updated:** Make sure that lead exists in Excelr8 and has both a non-empty name and a LinkedIn profile URL. Email helps matching but is optional.
 - **Deal not there or wrong name:** Campaign name in Excelr8 becomes the deal name in HubSpot. Change the campaign name in Excelr8 and sync again if you want a different deal name.
 - **Note (dossier or LinkedIn) not there:** We only add those notes when the lead has a dossier link or at least one LinkedIn post in Excelr8. Add that data in Excelr8 and sync again.
 

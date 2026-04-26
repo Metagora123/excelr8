@@ -99,6 +99,14 @@ export async function POST(req: Request) {
     let postNotes = 0
     let assocOk = 0
     let assocFailed = 0
+    let dealFailures = 0
+    let dossierNoteFailures = 0
+    let postNoteFailures = 0
+    const leadOutcome = { successful: 0, failed: 0, skipped: 0 }
+    const leadReasonCounts = new Map<string, number>()
+    const bumpLeadReason = (reason: string) => {
+      leadReasonCounts.set(reason, (leadReasonCounts.get(reason) ?? 0) + 1)
+    }
 
     let processedLeads = 0
     let skippedLeadsMissingEssentials = 0
@@ -107,14 +115,24 @@ export async function POST(req: Request) {
       const linkedinUrl = (lead.profile_url ?? "").trim()
       if (!fullName || !linkedinUrl) {
         skippedLeadsMissingEssentials += 1
+        leadOutcome.skipped += 1
+        bumpLeadReason(!fullName ? "missing_full_name" : "missing_linkedin_url")
         logs.push(
           `Contact skipped for lead ${lead.id}: missing ${!fullName ? "full name" : "LinkedIn URL"}.`
         )
         continue
       }
-      const id = await upsertContact(leadToHubSpot(lead))
-      contactIdByLeadId.set(lead.id, id)
-      processedLeads += 1
+      try {
+        const id = await upsertContact(leadToHubSpot(lead))
+        contactIdByLeadId.set(lead.id, id)
+        processedLeads += 1
+        leadOutcome.successful += 1
+      } catch (e) {
+        leadOutcome.failed += 1
+        bumpLeadReason("contact_upsert_error")
+        const msg = e instanceof Error ? e.message.slice(0, 180) : "Unknown contact upsert error"
+        logs.push(`Contact failed for lead ${lead.id}: ${msg}`)
+      }
       if (processedLeads % 200 === 0) {
         logs.push(`Contacts: upserted ${processedLeads}/${leads.length}`)
       }
@@ -125,11 +143,17 @@ export async function POST(req: Request) {
 
     let processedDeals = 0
     for (const campaign of campaigns) {
-      const id = await upsertDeal(campaignToHubSpot(campaign))
-      dealIdByCampaignId.set(campaign.id, id)
-      processedDeals += 1
+      try {
+        const id = await upsertDeal(campaignToHubSpot(campaign))
+        dealIdByCampaignId.set(campaign.id, id)
+        processedDeals += 1
+      } catch (e) {
+        dealFailures += 1
+        const msg = e instanceof Error ? e.message.slice(0, 180) : "Unknown deal upsert error"
+        logs.push(`Deal failed for campaign ${campaign.id}: ${msg}`)
+      }
     }
-    logs.push(`Deals: upserted ${processedDeals} total.`)
+    logs.push(`Deals: upserted ${processedDeals} total, failed ${dealFailures}.`)
 
     for (const lc of leadCampaigns) {
       const cid = contactIdByLeadId.get(lc.lead_id)
@@ -161,16 +185,28 @@ export async function POST(req: Request) {
       const cid = contactIdByLeadId.get(lead.id)
       if (!cid) continue
       if ((lead.dossier_url ?? "").trim()) {
-        await createNoteOnContact(cid, `Dossier: ${lead.dossier_url!.trim()}`)
-        dossierNotes += 1
+        try {
+          await createNoteOnContact(cid, `Dossier: ${lead.dossier_url!.trim()}`)
+          dossierNotes += 1
+        } catch (e) {
+          dossierNoteFailures += 1
+          const msg = e instanceof Error ? e.message.slice(0, 180) : "Unknown dossier note error"
+          logs.push(`Dossier note failed for lead ${lead.id}: ${msg}`)
+        }
       }
       const posts = postsByLead.get(lead.id)
       if (posts && posts.count > 0) {
         const line = posts.firstPostUrl
           ? `LinkedIn: ${posts.count} post(s). Latest: ${posts.firstPostUrl}`
           : `LinkedIn: ${posts.count} post(s)`
-        await createNoteOnContact(cid, line)
-        postNotes += 1
+        try {
+          await createNoteOnContact(cid, line)
+          postNotes += 1
+        } catch (e) {
+          postNoteFailures += 1
+          const msg = e instanceof Error ? e.message.slice(0, 180) : "Unknown post note error"
+          logs.push(`Post note failed for lead ${lead.id}: ${msg}`)
+        }
       }
     }
 
@@ -202,10 +238,17 @@ export async function POST(req: Request) {
         leadCampaigns: leadCampaigns.length,
         leadsWithPosts: postsByLead.size,
         skippedLeadsMissingEssentials,
+        leadSuccess: leadOutcome.successful,
+        leadFailed: leadOutcome.failed,
+        leadSkipped: leadOutcome.skipped,
+        leadFailureReasons: Object.fromEntries(leadReasonCounts.entries()),
         dossierNotes,
+        dossierNoteFailures,
         postNotes,
+        postNoteFailures,
         assocOk,
         assocFailed,
+        dealFailures,
       },
       logs,
       preview: {

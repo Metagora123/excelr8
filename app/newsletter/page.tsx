@@ -38,10 +38,11 @@ const CHECKPOINTS: { key: string; label: string }[] = [
 ]
 
 export default function NewsletterPage() {
+  type NewsletterFileItem = { key: string; used: boolean }
   const [dateFolders, setDateFolders] = React.useState<string[]>([])
   const [selectedDate, setSelectedDate] = React.useState("")
   const [dateFoldersLoading, setDateFoldersLoading] = React.useState(true)
-  const [filesForDate, setFilesForDate] = React.useState<string[]>([])
+  const [filesForDate, setFilesForDate] = React.useState<NewsletterFileItem[]>([])
   const [filesLoading, setFilesLoading] = React.useState(false)
   const [selectedKeys, setSelectedKeys] = React.useState<Set<string>>(new Set())
   const [tone, setTone] = React.useState("Professional/No-Nonsense")
@@ -297,10 +298,10 @@ export default function NewsletterPage() {
     setFilesLoading(true)
     fetch(`/api/newsletter/files?date=${encodeURIComponent(selectedDate)}`)
       .then((res) => (res.ok ? res.json() : []))
-      .then((list: string[]) => {
+      .then((list: NewsletterFileItem[]) => {
         if (!cancelled && Array.isArray(list)) {
           setFilesForDate(list)
-          setSelectedKeys(new Set(list))
+          setSelectedKeys(new Set(list.map((f) => f.key)))
         } else if (!cancelled) {
           setFilesForDate([])
           setSelectedKeys(new Set())
@@ -353,7 +354,7 @@ export default function NewsletterPage() {
   }
 
   const selectAllFiles = () => {
-    setSelectedKeys(new Set(filesForDate))
+    setSelectedKeys(new Set(filesForDate.map((f) => f.key)))
   }
 
   const deselectAllFiles = () => {
@@ -537,9 +538,15 @@ export default function NewsletterPage() {
                   ) : (
                     <ul className="rounded-md border bg-muted/30 divide-y divide-border">
                       {filesForDate.map((f) => (
-                        <li key={f} className="flex items-center gap-2 px-3 py-2 text-sm">
+                        <li key={f.key} className="flex items-center gap-2 px-3 py-2 text-sm">
                           <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">{f}</span>
+                          <span className="truncate">{f.key}</span>
+                          {f.used && (
+                            <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-600">
+                              <CheckCircle2Icon className="h-3.5 w-3.5" />
+                              Used
+                            </span>
+                          )}
                         </li>
                       ))}
                     </ul>
@@ -778,16 +785,22 @@ export default function NewsletterPage() {
                     </div>
                     <ul className="rounded-md border bg-muted/30 divide-y divide-border max-h-[200px] overflow-y-auto">
                     {filesForDate.map((f) => (
-                      <li key={f} className="flex items-center gap-2 px-3 py-2 text-sm">
+                      <li key={f.key} className="flex items-center gap-2 px-3 py-2 text-sm">
                         <input
                           type="checkbox"
-                          checked={selectedKeys.has(f)}
-                          onChange={() => toggleFile(f)}
+                          checked={selectedKeys.has(f.key)}
+                          onChange={() => toggleFile(f.key)}
                           className="h-4 w-4 rounded border-input"
-                          aria-label={`Include ${f}`}
+                          aria-label={`Include ${f.key}`}
                         />
                         <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="truncate">{f}</span>
+                        <span className="truncate">{f.key}</span>
+                        {f.used && (
+                          <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-600">
+                            <CheckCircle2Icon className="h-3.5 w-3.5" />
+                            Used
+                          </span>
+                        )}
                       </li>
                     ))}
                     </ul>

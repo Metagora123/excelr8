@@ -287,11 +287,15 @@ export async function upsertDeal(campaign: CampaignForHubSpot): Promise<string> 
         ])
       ),
     }
-    await fetch(`${getApiBase()}/crm/v3/objects/deals/${existingId}`, {
+    const updateRes = await fetch(`${getApiBase()}/crm/v3/objects/deals/${existingId}`, {
       method: "PATCH",
       headers: getHeaders(),
       body: JSON.stringify(body),
     })
+    if (!updateRes.ok) {
+      const err = await updateRes.text()
+      throw new Error(`HubSpot deal update failed: ${updateRes.status} ${err}`)
+    }
     return existingId
   }
 

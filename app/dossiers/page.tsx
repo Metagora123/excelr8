@@ -67,6 +67,11 @@ type DossierLead = {
   connections_count?: number | null
   created_at?: string | null
   campaign_name?: string | null
+  campaign_id?: string | null
+}
+type CampaignOption = {
+  id: string
+  name: string
 }
 
 function getInitials(name: string | null | undefined) {
@@ -98,30 +103,102 @@ function toAbsoluteUrl(url: string | null | undefined): string | null {
 }
 
 export default function DossiersPage() {
+  const PAGE_SIZE = 9
   const [leads, setLeads] = React.useState<DossierLead[]>([])
   const [loading, setLoading] = React.useState(true)
+  const [loadingMore, setLoadingMore] = React.useState(false)
+  const [hasMore, setHasMore] = React.useState(true)
   const [search, setSearch] = React.useState("")
   const [tierFilter, setTierFilter] = React.useState<string>("all")
   const [statusFilter, setStatusFilter] = React.useState<string>("all")
   const [selected, setSelected] = React.useState<DossierLead | null>(null)
+  const [campaignFilter, setCampaignFilter] = React.useState<string>("all")
+  const [campaignOptions, setCampaignOptions] = React.useState<CampaignOption[]>([])
   const { project } = useSupabaseProject()
+  const loadMoreRef = React.useRef<HTMLDivElement | null>(null)
 
-  const load = React.useCallback(async () => {
-    setLoading(true)
+  const load = React.useCallback(async (opts?: { reset?: boolean }) => {
+    const reset = opts?.reset ?? false
+    if (reset) {
+      setLoading(true)
+    } else {
+      if (!hasMore || loadingMore || loading) return
+      setLoadingMore(true)
+    }
     try {
-      const res = await fetch(`/api/dossiers?project=${encodeURIComponent(project)}`)
-      if (res.ok) setLeads(await res.json())
-      else setLeads([])
+      const params = new URLSearchParams({ project })
+      if (campaignFilter !== "all") {
+        params.set("campaignId", campaignFilter)
+      }
+      params.set("limit", String(PAGE_SIZE))
+      params.set("offset", String(reset ? 0 : leads.length))
+      const res = await fetch(`/api/dossiers?${params.toString()}`)
+      if (res.ok) {
+        const payload = (await res.json()) as { items?: DossierLead[]; hasMore?: boolean }
+        const items = Array.isArray(payload.items) ? payload.items : []
+        setHasMore(Boolean(payload.hasMore))
+        if (reset) {
+          setLeads(items)
+        } else {
+          setLeads((prev) => [...prev, ...items])
+        }
+      } else if (reset) {
+        setLeads([])
+        setHasMore(false)
+      }
     } catch {
-      setLeads([])
+      if (reset) setLeads([])
+      setHasMore(false)
     } finally {
-      setLoading(false)
+      if (reset) {
+        setLoading(false)
+      } else {
+        setLoadingMore(false)
+      }
+    }
+  }, [project, campaignFilter, hasMore, loadingMore, loading, leads.length])
+
+  React.useEffect(() => {
+    setHasMore(true)
+    load({ reset: true })
+  }, [project, campaignFilter])
+
+  React.useEffect(() => {
+    let cancelled = false
+    fetch(`/api/dossiers/campaigns?project=${encodeURIComponent(project)}`)
+      .then((res) => (res.ok ? res.json() : []))
+      .then((rows: CampaignOption[]) => {
+        if (!cancelled && Array.isArray(rows)) {
+          setCampaignOptions(
+            rows
+              .filter((r) => (r.name ?? "").trim() !== "")
+              .map((r) => ({ id: r.id, name: r.name }))
+          )
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setCampaignOptions([])
+      })
+    return () => {
+      cancelled = true
     }
   }, [project])
 
   React.useEffect(() => {
-    load()
-  }, [load])
+    if (!hasMore || loading || loadingMore) return
+    const node = loadMoreRef.current
+    if (!node) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0]?.isIntersecting) {
+          load()
+        }
+      },
+      { rootMargin: "200px 0px" }
+    )
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [load, hasMore, loading, loadingMore])
 
   const filtered = React.useMemo(() => {
     let list = leads
@@ -141,9 +218,8 @@ export default function DossiersPage() {
 
   const tiers = React.useMemo(() => Array.from(new Set(leads.map((l) => l.tier).filter(Boolean))) as string[], [leads])
   const statuses = React.useMemo(() => Array.from(new Set(leads.map((l) => l.status).filter(Boolean))) as string[], [leads])
-
   return (
-    <AppShell title="Dossiers" onRefresh={load}>
+    <AppShell title="Dossiers" onRefresh={() => load({ reset: true })}>
       <div className="px-4 lg:px-6 space-y-6">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -183,6 +259,19 @@ export default function DossiersPage() {
               <SelectItem value="all">All Statuses</SelectItem>
               {statuses.map((s) => (
                 <SelectItem key={s} value={s}>{s}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={campaignFilter} onValueChange={setCampaignFilter}>
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="All Campaigns" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Campaigns</SelectItem>
+              {campaignOptions.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -299,10 +388,15 @@ export default function DossiersPage() {
         {!loading && filtered.length === 0 && (
           <p className="text-muted-foreground text-sm">No dossiers found.</p>
         )}
+        {!loading && filtered.length > 0 && (
+          <div ref={loadMoreRef} className="py-2 text-center text-xs text-muted-foreground">
+            {loadingMore ? "Loading more dossiers..." : hasMore ? "Scroll to load more" : "All dossiers loaded"}
+          </div>
+        )}
       </div>
 
       <Sheet open={!!selected} onOpenChange={(open) => !open && setSelected(null)}>
-        <SheetContent side="center" className="overflow-y-auto w-full max-w-3xl sm:max-w-4xl bg-background text-foreground p-8 gap-8" overlayClassName="!backdrop-blur-none bg-black/20">
+        <SheetContent side="right" className="overflow-y-auto w-full sm:max-w-xl lg:max-w-2xl bg-background text-foreground p-6 sm:p-8 gap-8" overlayClassName="bg-black/20">
           {selected && (
             <>
               <SheetHeader className="sr-only">

@@ -9,8 +9,15 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
     const project = parseProject(searchParams.get("project"))
-    const leads = await getWithDossiers(project)
-    return NextResponse.json(leads)
+    const campaignId = searchParams.get("campaignId")?.trim() || undefined
+    const limitRaw = Number(searchParams.get("limit"))
+    const offsetRaw = Number(searchParams.get("offset"))
+    const limit = Number.isFinite(limitRaw) && limitRaw > 0 ? Math.min(limitRaw, 100) : undefined
+    const offset = Number.isFinite(offsetRaw) && offsetRaw >= 0 ? Math.floor(offsetRaw) : 0
+
+    const items = await getWithDossiers(project, campaignId, { limit, offset })
+    const hasMore = typeof limit === "number" ? items.length === limit : false
+    return NextResponse.json({ items, hasMore })
   } catch (err) {
     console.error("Dossiers API error:", err)
     return NextResponse.json(

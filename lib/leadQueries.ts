@@ -25,6 +25,7 @@ export type LeadRow = {
   connections_count?: number | null
   created_at?: string | null
   campaign_name?: string | null
+  campaign_id?: string | null
 }
 
 export type Stats = {
@@ -79,6 +80,7 @@ function mapToLeadRow(row: Record<string, unknown>): LeadRow {
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections ?? row.connection_count),
     created_at: (row.created_at ?? null) as string | null,
     campaign_name: (row.campaign_name ?? row.campaign_names ?? null) as string | null,
+    campaign_id: (row.campaign_id ?? null) as string | null,
   }
 }
 
@@ -138,25 +140,53 @@ function mapDossierRow(row: Record<string, unknown>, lead?: LeadRow | null): Lea
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections) ?? lead?.connections_count ?? null,
     created_at: (row.created_at ?? null) as string | null,
     campaign_name: (row.campaign_name ?? row.campaign_names ?? lead?.campaign_name ?? null) as string | null,
+    campaign_id: (row.campaign_id ?? lead?.campaign_id ?? null) as string | null,
   }
 }
 
 /** Dossiers: try `dossiers` table first (paginated), merge with leads when lead_id present; else leads with dossier set */
-export async function getWithDossiers(project: SupabaseProject = "sales2k25"): Promise<LeadRow[]> {
+export async function getWithDossiers(
+  project: SupabaseProject = "sales2k25",
+  campaignId?: string,
+  options?: { limit?: number; offset?: number }
+): Promise<LeadRow[]> {
   const supabase = getSupabase(project)
+  const campaignFilter = (campaignId ?? "").trim()
+  const limit = options?.limit
+  const offset = options?.offset ?? 0
+  const hasPagination = typeof limit === "number" && limit > 0
   const dossiersRows: Record<string, unknown>[] = []
-  let from = 0
-  while (true) {
-    const { data, error } = await supabase
+  if (hasPagination) {
+    let query = supabase
       .from("dossiers")
       .select("*")
       .order("created_at", { ascending: false })
-      .range(from, from + PAGE_SIZE - 1)
-    if (error) break
-    const chunk = (data ?? []) as Record<string, unknown>[]
-    dossiersRows.push(...chunk)
-    if (chunk.length < PAGE_SIZE) break
-    from += PAGE_SIZE
+      .range(offset, offset + (limit as number) - 1)
+    if (campaignFilter) {
+      query = query.eq("campaign_id", campaignFilter)
+    }
+    const { data, error } = await query
+    if (!error) {
+      dossiersRows.push(...(((data ?? []) as Record<string, unknown>[])))
+    }
+  } else {
+    let from = 0
+    while (true) {
+      let query = supabase
+        .from("dossiers")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .range(from, from + PAGE_SIZE - 1)
+      if (campaignFilter) {
+        query = query.eq("campaign_id", campaignFilter)
+      }
+      const { data, error } = await query
+      if (error) break
+      const chunk = (data ?? []) as Record<string, unknown>[]
+      dossiersRows.push(...chunk)
+      if (chunk.length < PAGE_SIZE) break
+      from += PAGE_SIZE
+    }
   }
   if (dossiersRows.length > 0) {
     const leadIds = [...new Set(dossiersRows.map((r) => String(r.lead_id ?? r.id ?? "")).filter(Boolean))]
@@ -165,9 +195,31 @@ export async function getWithDossiers(project: SupabaseProject = "sales2k25"): P
       const allLeads = await getAllLeads(project)
       for (const l of allLeads) leadsById.set(l.id, l)
     }
-    const campaignIds = [...new Set(dossiersRows.map((r) => String(r.campaign_id ?? "")).filter(Boolean))]
+
+    // Canonical campaign linkage: lead_id -> lead_campaigns -> campaign_id -> campaign name
+    const leadToCampaignIds = new Map<string, string[]>()
+    if (leadIds.length > 0) {
+      let linksQuery = supabase
+        .from("lead_campaigns")
+        .select("lead_id, campaign_id")
+        .in("lead_id", leadIds)
+      if (campaignFilter) {
+        linksQuery = linksQuery.eq("campaign_id", campaignFilter)
+      }
+      const { data: links, error: linksError } = await linksQuery
+      if (linksError) throw new Error(`lead_campaigns: ${linksError.message}`)
+      for (const row of links ?? []) {
+        const lid = String((row as { lead_id?: string }).lead_id ?? "")
+        const cid = String((row as { campaign_id?: string }).campaign_id ?? "")
+        if (!lid || !cid) continue
+        const arr = leadToCampaignIds.get(lid) ?? []
+        arr.push(cid)
+        leadToCampaignIds.set(lid, arr)
+      }
+    }
+
     const campaignIdToName = new Map<string, string>()
-    if (campaignIds.length > 0) {
+    if (leadToCampaignIds.size > 0) {
       try {
         const campaigns = await getAllCampaigns(project)
         for (const c of campaigns) campaignIdToName.set(c.id, c.name ?? c.id)
@@ -175,21 +227,55 @@ export async function getWithDossiers(project: SupabaseProject = "sales2k25"): P
         // ignore
       }
     }
-    return dossiersRows.map((row) => {
+
+    const sourceRows =
+      campaignFilter
+        ? dossiersRows.filter((row) => {
+            const leadId = String(row.lead_id ?? row.id ?? "")
+            return leadToCampaignIds.has(leadId)
+          })
+        : dossiersRows
+
+    return sourceRows.map((row) => {
       const leadId = String(row.lead_id ?? row.id ?? "")
       const lead = leadId ? leadsById.get(leadId) : null
       const mapped = mapDossierRow(row, lead)
-      if (!(mapped.campaign_name ?? "").trim() && row.campaign_id) {
-        const name = campaignIdToName.get(String(row.campaign_id))
-        if (name) mapped.campaign_name = name
+
+      const linkedCampaigns = leadToCampaignIds.get(leadId) ?? []
+      if (!mapped.campaign_id && linkedCampaigns.length > 0) {
+        mapped.campaign_id = linkedCampaigns[0]
+      }
+      if (!(mapped.campaign_name ?? "").trim() && linkedCampaigns.length > 0) {
+        const names = linkedCampaigns
+          .map((cid) => campaignIdToName.get(cid) ?? cid)
+          .filter(Boolean)
+        if (names.length > 0) {
+          mapped.campaign_name = names.join(", ")
+        }
       }
       return mapped
     })
   }
   const all = await getAllLeads(project)
-  return all.filter(
+  const dossierLeads = all.filter(
     (l) => l.is_dossier === true || (l.dossier_url != null && String(l.dossier_url).trim() !== "")
   )
+  if (!campaignFilter) return dossierLeads
+
+  // Relational campaign filter fallback when dossiers table doesn't provide campaign_id.
+  const { data: links, error: linksError } = await supabase
+    .from("lead_campaigns")
+    .select("lead_id")
+    .eq("campaign_id", campaignFilter)
+  if (linksError) {
+    throw new Error(`lead_campaigns: ${linksError.message}`)
+  }
+  const allowedLeadIds = new Set(
+    (links ?? []).map((r) => String((r as { lead_id?: string }).lead_id ?? "")).filter(Boolean)
+  )
+  const filtered = dossierLeads.filter((l) => allowedLeadIds.has(l.id))
+  if (!hasPagination) return filtered
+  return filtered.slice(offset, offset + (limit as number))
 }
 
 export async function getStats(project: SupabaseProject = "sales2k25"): Promise<Stats> {

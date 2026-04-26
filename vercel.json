@@ -5,6 +5,14 @@
     {
       "path": "/api/campaign-automations/run-scheduled",
       "schedule": "0 6 * * *"
+    },
+    {
+      "path": "/api/auto-comment-automations/monitor-scheduled",
+      "schedule": "15 6 * * *"
+    },
+    {
+      "path": "/api/auto-comment-automations/run-scheduled",
+      "schedule": "45 6 * * *"
     }
   ]
 }

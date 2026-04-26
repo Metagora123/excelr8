@@ -100,7 +100,24 @@ type AutoCommentRunLog = {
   status?: string
   processed_count?: number
   failed_count?: number
-  records?: Array<{ record_id?: string; lead_name?: string; post_content_preview?: string; error?: string }>
+  records?: Array<{
+    record_id?: string
+    lead_name?: string
+    post_content_preview?: string
+    error?: string
+    mode?: "comment_generation" | "monitoring"
+    lead_id?: string
+    monitored?: boolean
+    discovered_count?: number
+    new_posts_supabase?: number
+    new_posts_airtable?: number
+    new_posts_added?: number
+    skipped_existing?: number
+  }>
+  mode?: "comment_generation" | "monitoring"
+  discovered_count?: number
+  new_posts_added?: number
+  skipped_existing?: number
 }
 
 type AutoCommentRow = {
@@ -126,7 +143,9 @@ export default function CampaignAutomationsPage() {
   const [autoCommentAutomations, setAutoCommentAutomations] = React.useState<AutoCommentRow[]>([])
   const [autoCommentLoading, setAutoCommentLoading] = React.useState(true)
   const [autoCommentRunningId, setAutoCommentRunningId] = React.useState<string | null>(null)
+  const [autoCommentMonitoringId, setAutoCommentMonitoringId] = React.useState<string | null>(null)
   const [autoCommentSuccessId, setAutoCommentSuccessId] = React.useState<string | null>(null)
+  const [autoCommentMonitoringSuccessId, setAutoCommentMonitoringSuccessId] = React.useState<string | null>(null)
   const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
@@ -242,6 +261,30 @@ export default function CampaignAutomationsPage() {
       setError(e instanceof Error ? e.message : "Run failed")
     } finally {
       setAutoCommentRunningId(null)
+    }
+  }
+
+  const handleAutoCommentMonitorRunNow = async (id: string) => {
+    setAutoCommentMonitoringId(id)
+    setError(null)
+    setAutoCommentMonitoringSuccessId(null)
+    try {
+      const res = await fetch(
+        `/api/auto-comment-automations/${encodeURIComponent(id)}/monitor?project=${encodeURIComponent(project)}`,
+        { method: "POST" }
+      )
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        setError(data.error || res.statusText || "Monitoring run failed")
+        return
+      }
+      await loadAutoComment()
+      setAutoCommentMonitoringSuccessId(id)
+      setTimeout(() => setAutoCommentMonitoringSuccessId(null), 5000)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Monitoring run failed")
+    } finally {
+      setAutoCommentMonitoringId(null)
     }
   }
 
@@ -441,9 +484,9 @@ export default function CampaignAutomationsPage() {
 
         <Card>
           <CardHeader>
-            <CardTitle>Auto Comment automations</CardTitle>
+            <CardTitle>Auto Comment Monitoring</CardTitle>
             <CardDescription>
-              One row per campaign with an Auto Like Airtable table. Run now generates 4 comments (A–D) per post from <code className="bg-muted px-1 rounded text-xs">post_content</code> and writes <code className="bg-muted px-1 rounded text-xs">comment_a</code>–<code className="bg-muted px-1 rounded text-xs">comment_d</code> to Airtable. Rows that already have all four <code className="bg-muted px-1 rounded text-xs">comment_a</code>–<code className="bg-muted px-1 rounded text-xs">comment_d</code> are skipped.
+              One row per campaign with an Auto Like Airtable table. <strong>Monitor posts</strong> discovers newly ingested posts and appends only unseen posts to Airtable (deduped by <code className="bg-muted px-1 rounded text-xs">post_id</code>/<code className="bg-muted px-1 rounded text-xs">post_url</code>). This section only monitors and syncs new posts.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -502,6 +545,106 @@ export default function CampaignAutomationsPage() {
                           {autoCommentSuccessId === a.id && (
                             <span className="text-xs text-green-600 dark:text-green-400 mr-1">Run finished — see Logs</span>
                           )}
+                          {autoCommentMonitoringSuccessId === a.id && (
+                            <span className="text-xs text-green-600 dark:text-green-400 mr-1">Monitoring finished — see Logs</span>
+                          )}
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-8"
+                            disabled={autoCommentMonitoringId === a.id}
+                            onClick={() => handleAutoCommentMonitorRunNow(a.id)}
+                          >
+                            <PlayIcon className="h-3.5 w-3 mr-1" />
+                            {autoCommentMonitoringId === a.id ? "Monitoring…" : "Monitor posts"}
+                          </Button>
+                          <Sheet>
+                            <SheetTrigger asChild>
+                              <Button variant="outline" size="sm" className="h-8">
+                                <FileTextIcon className="h-3.5 w-3 mr-1" />
+                                Logs
+                              </Button>
+                            </SheetTrigger>
+                            <SheetContent side="right" className="w-full sm:max-w-xl overflow-y-auto">
+                              <SheetHeader>
+                                <SheetTitle>Auto Comment run logs – {a.campaign_name ?? a.campaign_id.slice(0, 8)}</SheetTitle>
+                              </SheetHeader>
+                              <AutoCommentLogsPreview runLogs={a.run_logs} formatDate={formatDate} />
+                            </SheetContent>
+                          </Sheet>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Auto Comment Generator</CardTitle>
+            <CardDescription>
+              Original functionality: generate <code className="bg-muted px-1 rounded text-xs">comment_a</code>, <code className="bg-muted px-1 rounded text-xs">comment_b</code>, <code className="bg-muted px-1 rounded text-xs">comment_c</code>, and <code className="bg-muted px-1 rounded text-xs">comment_d</code> for posts that are missing them.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            {autoCommentLoading ? (
+              <p className="text-muted-foreground text-sm">Loading…</p>
+            ) : autoCommentAutomations.length === 0 ? (
+              <p className="text-muted-foreground text-sm">
+                No Auto Comment automations yet. Create a campaign in Campaign Manager with &quot;Auto Like / Auto Comment&quot; checked to get an Auto Like table and this automation.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Campaign</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Last run</TableHead>
+                    <TableHead>Airtable</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {autoCommentAutomations.map((a) => (
+                    <TableRow key={`generator-${a.id}`}>
+                      <TableCell className="font-medium">
+                        {a.campaign_name ?? a.campaign_id.slice(0, 8) + "…"}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={
+                            a.is_active
+                              ? "text-green-600 dark:text-green-400"
+                              : "text-muted-foreground"
+                          }
+                        >
+                          {a.is_active ? "Active" : "Paused"}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-sm">
+                        {formatDate(a.last_run_at)}
+                        {a.last_run_status && (
+                          <span className="ml-1 text-xs">({a.last_run_status})</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <a
+                          href={airtableUrl(a.airtable_base_id, a.airtable_table_id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-1 text-primary hover:underline text-sm"
+                        >
+                          Open <ExternalLinkIcon className="h-3 w-3" />
+                        </a>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-1 justify-end flex-wrap">
+                          {autoCommentSuccessId === a.id && (
+                            <span className="text-xs text-green-600 dark:text-green-400 mr-1">Run finished — see Logs</span>
+                          )}
                           <Button
                             variant="outline"
                             size="sm"
@@ -510,7 +653,7 @@ export default function CampaignAutomationsPage() {
                             onClick={() => handleAutoCommentRunNow(a.id)}
                           >
                             <PlayIcon className="h-3.5 w-3 mr-1" />
-                            {autoCommentRunningId === a.id ? "Running…" : "Run now"}
+                            {autoCommentRunningId === a.id ? "Running…" : "Generate comments"}
                           </Button>
                           <Sheet>
                             <SheetTrigger asChild>
@@ -562,6 +705,11 @@ function AutoCommentLogsPreview({
         const i = runs.length - 1 - idx
         const isExpanded = expandedIndex === i
         const records = Array.isArray(run.records) ? run.records : []
+        const monitoringSummary = records.find((r) => r.mode === "monitoring" && r.lead_id === "summary")
+        const monitoredLeadsSummary = records.find((r) => r.mode === "monitoring" && r.lead_id === "summary_leads")
+        const perLeadMonitoring = records.filter(
+          (r) => r.mode === "monitoring" && r.lead_id && r.lead_id !== "summary" && r.lead_id !== "summary_leads"
+        )
         return (
           <div
             key={i}
@@ -595,6 +743,11 @@ function AutoCommentLogsPreview({
                     processed: {run.processed_count ?? 0} · failed: {run.failed_count ?? 0}
                   </span>
                 )}
+                {monitoringSummary && (
+                  <span className="text-xs text-muted-foreground">
+                    leads monitored: {monitoredLeadsSummary?.discovered_count ?? 0} · discovered: {monitoringSummary.discovered_count ?? 0} · new in Supabase: {monitoringSummary.new_posts_supabase ?? 0} · new in Airtable: {monitoringSummary.new_posts_airtable ?? 0} · skipped existing: {monitoringSummary.skipped_existing ?? 0}
+                  </span>
+                )}
               </div>
               <span className="text-muted-foreground text-xs shrink-0">
                 {records.length} row{records.length !== 1 ? "s" : ""} {isExpanded ? "▼" : "▶"}
@@ -602,7 +755,19 @@ function AutoCommentLogsPreview({
             </button>
             {isExpanded && records.length > 0 && (
               <div className="border-t bg-background/50 px-3 py-2 space-y-2 max-h-[420px] overflow-y-auto">
-                {records.map((rec, j) => (
+                {perLeadMonitoring.length > 0
+                  ? perLeadMonitoring.map((rec, j) => (
+                      <div key={j} className="text-xs rounded border p-3 space-y-1">
+                        {rec.lead_name != null && <div className="font-medium">{rec.lead_name}</div>}
+                        <div className="text-muted-foreground">
+                          monitored: {rec.monitored ? "yes" : "no"} · discovered: {rec.discovered_count ?? 0} · new in Supabase: {rec.new_posts_supabase ?? 0} · new in Airtable: {rec.new_posts_airtable ?? 0} · skipped existing: {rec.skipped_existing ?? 0}
+                        </div>
+                        {rec.error != null && (
+                          <div className="text-destructive">{rec.error}</div>
+                        )}
+                      </div>
+                    ))
+                  : records.map((rec, j) => (
                   <div key={j} className="text-xs rounded border p-3 space-y-1">
                     {rec.lead_name != null && <div className="font-medium">{rec.lead_name}</div>}
                     {rec.post_content_preview != null && (
