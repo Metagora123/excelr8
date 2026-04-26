@@ -101,7 +101,17 @@ export async function POST(req: Request) {
     let assocFailed = 0
 
     let processedLeads = 0
+    let skippedLeadsMissingEssentials = 0
     for (const lead of leads) {
+      const fullName = (lead.name ?? "").trim()
+      const linkedinUrl = (lead.profile_url ?? "").trim()
+      if (!fullName || !linkedinUrl) {
+        skippedLeadsMissingEssentials += 1
+        logs.push(
+          `Contact skipped for lead ${lead.id}: missing ${!fullName ? "full name" : "LinkedIn URL"}.`
+        )
+        continue
+      }
       const id = await upsertContact(leadToHubSpot(lead))
       contactIdByLeadId.set(lead.id, id)
       processedLeads += 1
@@ -109,7 +119,9 @@ export async function POST(req: Request) {
         logs.push(`Contacts: upserted ${processedLeads}/${leads.length}`)
       }
     }
-    logs.push(`Contacts: upserted ${processedLeads} total.`)
+    logs.push(
+      `Contacts: upserted ${processedLeads} total, skipped ${skippedLeadsMissingEssentials} missing essentials.`
+    )
 
     let processedDeals = 0
     for (const campaign of campaigns) {
@@ -189,6 +201,7 @@ export async function POST(req: Request) {
         campaigns: campaigns.length,
         leadCampaigns: leadCampaigns.length,
         leadsWithPosts: postsByLead.size,
+        skippedLeadsMissingEssentials,
         dossierNotes,
         postNotes,
         assocOk,

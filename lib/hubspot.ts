@@ -7,6 +7,9 @@
 
 import { getHubSpotAccessToken, getHubSpotApiBase } from "./env"
 
+const PROFILE_URL_PROPERTY = "excelr8_profile_url"
+let canUseProfileUrlProperty = true
+
 function getApiBase(): string {
   return getHubSpotApiBase()
 }
@@ -43,6 +46,14 @@ function getHeaders(): Record<string, string> {
     Authorization: `Bearer ${token}`,
     "Content-Type": "application/json",
   }
+}
+
+function isMissingProfileUrlPropertyError(errorText: string): boolean {
+  if (!errorText) return false
+  return (
+    errorText.includes("PROPERTY_DOESNT_EXIST") &&
+    errorText.includes(`"${PROFILE_URL_PROPERTY}"`)
+  )
 }
 
 export type LeadForHubSpot = {
@@ -120,10 +131,10 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
   if (email) {
     properties.email = email
   }
-  if (profileUrl) {
+  if (profileUrl && canUseProfileUrlProperty) {
     // Custom property you should create in HubSpot (single-line text):
     // excelr8_profile_url – used for dedupe when email is missing.
-    properties.excelr8_profile_url = profileUrl
+    properties[PROFILE_URL_PROPERTY] = profileUrl
   }
   const mappedStatus = mapLeadStatusToHubSpot(lead.status)
   if (mappedStatus) {
@@ -131,7 +142,7 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
   }
 
   let existingId = email ? await findContactByEmail(email) : null
-  if (!existingId && !email && profileUrl) {
+  if (!existingId && !email && profileUrl && canUseProfileUrlProperty) {
     // Fallback: try to find by LinkedIn/profile URL when we don't have email.
     try {
       const byProfile = await findContactByProfileUrl(profileUrl)
@@ -141,11 +152,32 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
     }
   }
   if (existingId) {
-    await fetch(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, {
+    const updateRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, {
       method: "PATCH",
       headers: getHeaders(),
       body: JSON.stringify({ properties }),
     })
+    if (!updateRes.ok) {
+      const err = await updateRes.text()
+      if (
+        Object.prototype.hasOwnProperty.call(properties, PROFILE_URL_PROPERTY) &&
+        isMissingProfileUrlPropertyError(err)
+      ) {
+        canUseProfileUrlProperty = false
+        delete properties[PROFILE_URL_PROPERTY]
+        const retryRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, {
+          method: "PATCH",
+          headers: getHeaders(),
+          body: JSON.stringify({ properties }),
+        })
+        if (!retryRes.ok) {
+          const retryErr = await retryRes.text()
+          throw new Error(`HubSpot contact update failed: ${retryRes.status} ${retryErr}`)
+        }
+      } else {
+        throw new Error(`HubSpot contact update failed: ${updateRes.status} ${err}`)
+      }
+    }
     return existingId
   }
 
@@ -156,6 +188,24 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
   })
   if (!res.ok) {
     const err = await res.text()
+    if (
+      Object.prototype.hasOwnProperty.call(properties, PROFILE_URL_PROPERTY) &&
+      isMissingProfileUrlPropertyError(err)
+    ) {
+      canUseProfileUrlProperty = false
+      delete properties[PROFILE_URL_PROPERTY]
+      const retryRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts`, {
+        method: "POST",
+        headers: getHeaders(),
+        body: JSON.stringify({ properties }),
+      })
+      if (!retryRes.ok) {
+        const retryErr = await retryRes.text()
+        throw new Error(`HubSpot contact create failed: ${retryRes.status} ${retryErr}`)
+      }
+      const retryData = (await retryRes.json()) as { id: string }
+      return retryData.id
+    }
     throw new Error(`HubSpot contact create failed: ${res.status} ${err}`)
   }
   const data = (await res.json()) as { id: string }
@@ -189,7 +239,7 @@ export async function findDealByName(name: string): Promise<string | null> {
 
 /** Search for a contact by custom LinkedIn/profile URL property. Returns HubSpot id or null. */
 export async function findContactByProfileUrl(url: string): Promise<string | null> {
-  if (!url?.trim()) return null
+  if (!url?.trim() || !canUseProfileUrlProperty) return null
   const res = await fetch(`${getApiBase()}/crm/v3/objects/contacts/search`, {
     method: "POST",
     headers: getHeaders(),
@@ -197,15 +247,19 @@ export async function findContactByProfileUrl(url: string): Promise<string | nul
       filterGroups: [
         {
           filters: [
-            { propertyName: "excelr8_profile_url", operator: "EQ", value: url.trim() },
+            { propertyName: PROFILE_URL_PROPERTY, operator: "EQ", value: url.trim() },
           ],
         },
       ],
-      properties: ["excelr8_profile_url"],
+      properties: [PROFILE_URL_PROPERTY],
     }),
   })
   if (!res.ok) {
     const err = await res.text()
+    if (isMissingProfileUrlPropertyError(err)) {
+      canUseProfileUrlProperty = false
+      return null
+    }
     throw new Error(`HubSpot contact search by profile_url failed: ${res.status} ${err}`)
   }
   const data = (await res.json()) as { results?: { id: string }[] }
