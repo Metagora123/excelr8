@@ -282,18 +282,45 @@ export const HITLIST_TABLE_FIELDS: Array<{ name: string; type: string; options?:
   { name: "Tempo_2", type: "singleLineText" },
   { name: "Message_3", type: "multilineText" },
   { name: "Tempo_3", type: "singleLineText" },
+  // Per-campaign UUID stamped on every row at append time. The dashboard
+  // verifies this against `in_app_campaign_automations.airtable_button_token`
+  // before honouring an `In_App_Button` click. Hidden by default in Airtable
+  // (the user can hide the column manually—Airtable API has no hidden flag).
+  { name: "Button_Token", type: "singleLineText" },
   {
     name: "status",
     type: "singleSelect",
     options: {
       choices: [
         { name: "fresh" },
-        { name: "messaged" },
         { name: "invited" },
+        { name: "to_be_messaged" },
+        { name: "message_1_sent" },
+        { name: "message_2_sent" },
+        { name: "messaged" },
+        { name: "invite_failed" },
+        { name: "messaging_failed" },
       ],
     },
   },
 ]
+
+/**
+ * In-app Airtable button formula (sibling of the existing n8n button).
+ *
+ * The Hitlist `In_App_Button` field is added by the user in the Airtable UI;
+ * we can't create a true Airtable Button via the metadata API. We just expose
+ * the formula they paste in. The route at /api/airtable/trigger validates
+ * `Button_Token` against the campaign's stored secret and dispatches the
+ * correct lifecycle action based on the row's current status.
+ */
+export function getInAppHitlistButtonFormula(dashboardBaseUrl: string): string {
+  const base = (dashboardBaseUrl || "").replace(/\/+$/, "")
+  return `"${base}/api/airtable/trigger"
+& "?campaign_id=" & ENCODE_URL_COMPONENT({campaign_id})
+& "&record_id=" & RECORD_ID()
+& "&token=" & ENCODE_URL_COMPONENT({Button_Token})`
+}
 
 /** Build Select_Poster singleSelect field with choices from Supabase unipile_accounts (usernames) + None. */
 function buildSelectPosterField(usernames: string[]): { name: string; type: string; options: { choices: Array<{ name: string }> } } {
@@ -465,6 +492,71 @@ export async function upsertLeadsAndFillLeadCampaigns(
   }
 
   return { inserted, updated, leadIdsByProfileUrl }
+}
+
+/**
+ * After enrichment, Supabase `leads` holds Unipile headline (`description`),
+ * updated company, counts, etc. Hitlist append still used the in-memory CSV
+ * rows — merge DB fields back in so Airtable gets Headline/Summary and fresher
+ * org/title when the API filled them.
+ */
+export async function mergeNormalizedWithSupabaseLeadFields(
+  project: SupabaseProject,
+  normalized: NormalizedLead[],
+  leadIdsByProfileUrl: Map<string, string>
+): Promise<void> {
+  const ids = Array.from(new Set(leadIdsByProfileUrl.values())).filter(Boolean)
+  if (ids.length === 0 || normalized.length === 0) return
+  const supabase = createClient(project)
+  const { data, error } = await supabase
+    .from("leads")
+    .select(
+      "id, profile_url, description, company_name, title, location, about_summary, expertise, followers_count, connections_count, phone, email"
+    )
+    .in("id", ids)
+  if (error || !data?.length) return
+
+  const byProfileUrl = new Map<string, Record<string, unknown>>()
+  for (const row of data as Array<Record<string, unknown>>) {
+    const url = String(row.profile_url ?? "").trim()
+    if (url) byProfileUrl.set(url, row)
+  }
+
+  const pick = (v: unknown): string | null => {
+    if (v == null) return null
+    const s = String(v).trim()
+    return s === "" ? null : s
+  }
+
+  for (const lead of normalized) {
+    const url = (lead.profile_url ?? "").trim()
+    if (!url) continue
+    const db = byProfileUrl.get(url)
+    if (!db) continue
+
+    const desc = pick(db.description)
+    if (desc) lead.description = desc
+    const about = pick(db.about_summary)
+    if (about) lead.about_summary = about
+    const company = pick(db.company_name)
+    if (company) lead.company_name = company
+    const title = pick(db.title)
+    if (title) lead.title = title
+    const loc = pick(db.location)
+    if (loc) lead.location = loc
+    const exp = pick(db.expertise)
+    if (exp) lead.expertise = exp
+    const phone = pick(db.phone)
+    if (phone) lead.phone = phone
+    const email = pick(db.email)
+    if (email) lead.email = email
+    if (db.followers_count != null && Number.isFinite(Number(db.followers_count))) {
+      lead.followers_count = Number(db.followers_count)
+    }
+    if (db.connections_count != null && Number.isFinite(Number(db.connections_count))) {
+      lead.connections_count = Number(db.connections_count)
+    }
+  }
 }
 
 /** URLs for on-demand enrichment webhook (both called with the same payload). */
@@ -732,6 +824,26 @@ export async function listAirtableRecords(
   return out
 }
 
+/** Fetch a single Airtable record by id. Used by the in-app trigger endpoint. */
+export async function fetchAirtableRecord(
+  baseId: string,
+  token: string,
+  tableId: string,
+  recordId: string
+): Promise<AirtableRecord> {
+  const res = await fetch(
+    `https://api.airtable.com/v0/${baseId}/${tableId}/${encodeURIComponent(recordId)}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  if (!res.ok) {
+    const t = await res.text()
+    throw new Error(`Airtable get record: ${res.status} ${t}`)
+  }
+  const data = (await res.json()) as { id?: string; fields?: Record<string, unknown> }
+  if (!data.id || !data.fields) throw new Error("Airtable get record: malformed response")
+  return { id: data.id, fields: data.fields }
+}
+
 /** Delete up to 10 Airtable records by id. */
 export async function deleteAirtableRecords(
   baseId: string,
@@ -750,7 +862,13 @@ export async function deleteAirtableRecords(
   }
 }
 
-/** Update one Airtable record by id (partial fields update). */
+/**
+ * Update one Airtable record by id (partial fields update).
+ * `typecast: true` lets Airtable auto-add singleSelect choices when we write a
+ * value (e.g. a new status) that wasn't present at table-creation time. This
+ * prevents silent INVALID_MULTIPLE_CHOICE_OPTIONS swallowing for legacy tables
+ * created before the lifecycle was expanded.
+ */
 export async function updateAirtableRecord(
   baseId: string,
   token: string,
@@ -764,7 +882,7 @@ export async function updateAirtableRecord(
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ fields }),
+    body: JSON.stringify({ fields, typecast: true }),
   })
   if (!res.ok) {
     const t = await res.text()
@@ -779,7 +897,11 @@ export async function updateAirtableRecord(
  * - status: single-select \"fresh\" | \"messaged\" | \"invited\"; new leads get \"fresh\".
  * - campaign_id: Supabase campaign id for this hitlist.
  */
-function leadToAirtableHitlistFields(lead: NormalizedLead, campaignId: string): Record<string, unknown> {
+function leadToAirtableHitlistFields(
+  lead: NormalizedLead,
+  campaignId: string,
+  buttonToken?: string
+): Record<string, unknown> {
   const nameParts = (lead.full_name ?? "").split(" ")
   const firstName = nameParts[0] ?? ""
   const lastName = nameParts.slice(1).join(" ") ?? ""
@@ -801,8 +923,11 @@ function leadToAirtableHitlistFields(lead: NormalizedLead, campaignId: string): 
     Name: lead.full_name ?? "",
     Title: lead.title ?? "",
     Org: lead.company_name ?? "",
-    Headline: lead.expertise ?? "",
-    Summary: lead.about_summary ?? "",
+    // LinkedIn headline: enrichment writes Unipile `headline` → Supabase
+    // `leads.description`; we merge that back into `normalized` before append.
+    // Do NOT use `expertise` here (that is CSV “skills” → Reasoning below).
+    Headline: (lead.description ?? "").trim(),
+    Summary: (lead.about_summary ?? "").trim(),
     Title_Experience: lead.title ?? "",
     Company_Experience: lead.company_name ?? "",
     Company_Domain: lead.email ? lead.email.split("@")[1] : "",
@@ -823,6 +948,7 @@ function leadToAirtableHitlistFields(lead: NormalizedLead, campaignId: string): 
     Tempo_2: "",
     Message_3: "",
     Tempo_3: "",
+    Button_Token: buttonToken ?? "",
     status: statusValue,
   }
   if (tierValue !== undefined) record.Tier = tierValue
@@ -843,11 +969,12 @@ export async function createHitlistTableAndAppendLeads(
   tableName: string,
   leads: NormalizedLead[],
   project: SupabaseProject,
-  campaignId: string
+  campaignId: string,
+  buttonToken?: string
 ): Promise<CreateTableResult> {
   const resolved = await resolveHitlistSchema(baseId, token, project)
   const { tableId, url } = await createAirtableTable(baseId, token, tableName, resolved.fields)
-  const records = leads.map((lead) => leadToAirtableHitlistFields(lead, campaignId))
+  const records = leads.map((lead) => leadToAirtableHitlistFields(lead, campaignId, buttonToken))
   await appendAirtableRecords(baseId, token, tableId, records)
   const displayFields: AirtableSchemaField[] = resolved.fields.map((f) => ({ name: f.name, type: f.type }))
   return {
@@ -903,14 +1030,39 @@ export async function appendAutoLikeRecordsFromLeadPosts(
   const leadIdsSet = new Set(leadIds)
   const { data: leads } = await supabase
     .from("leads")
-    .select("id, profile_url, full_name")
+    .select(
+      "id, profile_url, full_name, title, location, company_name, expertise, description, about_summary"
+    )
     .in("id", leadIds)
   const profileByLeadId = new Map<string | null, string>()
   const nameByLeadId = new Map<string | null, string>()
+  const metaByLeadId = new Map<
+    string,
+    { title: string; location: string; company: string; expertise: string; headline: string; tags: string }
+  >()
   for (const l of leads ?? []) {
-    const id = (l as { id: string }).id
-    profileByLeadId.set(id, String((l as { profile_url?: string }).profile_url ?? "").trim())
-    nameByLeadId.set(id, String((l as { full_name?: string }).full_name ?? "").trim())
+    const row = l as {
+      id: string
+      profile_url?: string
+      full_name?: string
+      title?: string | null
+      location?: string | null
+      company_name?: string | null
+      expertise?: string | null
+      description?: string | null
+      about_summary?: string | null
+    }
+    const id = row.id
+    profileByLeadId.set(id, String(row.profile_url ?? "").trim())
+    nameByLeadId.set(id, String(row.full_name ?? "").trim())
+    const title = (row.title ?? "").trim()
+    const location = (row.location ?? "").trim()
+    const company = (row.company_name ?? "").trim()
+    const expertise = (row.expertise ?? "").trim()
+    const headline = (row.description ?? "").trim()
+    const parts = [title, location, company].filter(Boolean)
+    const tags = parts.length > 0 ? parts.join(" · ") : expertise || headline
+    metaByLeadId.set(id, { title, location, company, expertise, headline, tags })
   }
 
   const records: Record<string, unknown>[] = []
@@ -928,6 +1080,10 @@ export async function appendAutoLikeRecordsFromLeadPosts(
   }>) {
     const leadProfile = profileByLeadId.get(p.lead_id) ?? ""
     const leadName = (p.lead_name ?? nameByLeadId.get(p.lead_id) ?? "").trim() || "—"
+    const meta = metaByLeadId.get(p.lead_id)
+    const postCompany = (p.lead_company ?? "").trim()
+    const expertiseCell =
+      postCompany || meta?.company || meta?.expertise || meta?.headline || ""
     const commentators = p.commentators
     const reactioners = p.reactioners
     const commentatorsCount = Array.isArray(commentators) ? commentators.length : (typeof p.comments === "number" ? p.comments : 0)
@@ -954,10 +1110,10 @@ export async function appendAutoLikeRecordsFromLeadPosts(
       post_id: (p.linkedin_post_id ?? "").trim() || "—",
       post_url: (p.post_url ?? "").trim() || "—",
       Custom_Comment_Data: "",
-      title: "",
-      location: "",
-      expertise: (p.lead_company ?? "").trim() || "",
-      Tags: "",
+      title: meta?.title ?? "",
+      location: meta?.location ?? "",
+      expertise: expertiseCell,
+      Tags: meta?.tags ?? "",
       Confirmation_status: "None",
     })
   }
@@ -1014,20 +1170,29 @@ export async function updateCampaignLeadCount(
   if (error) throw new Error(`campaigns update total_leads: ${error.message}`)
 }
 
-/** Create in_app_campaign_automations row for hitlist automation (run daily, config + metrics + logs). */
+/**
+ * Create in_app_campaign_automations row for hitlist automation. The optional
+ * `airtableButtonToken` is the SAME UUID we stamp into every Airtable Hitlist
+ * row's `Button_Token` field. Keeping both sides in lockstep is what lets the
+ * `/api/airtable/trigger` route verify a click without ever trusting Airtable
+ * alone (token → automation lookup is the auth boundary).
+ */
 export async function createCampaignAutomationRow(
   project: SupabaseProject,
   campaignId: string,
   airtableBaseId: string,
-  airtableTableId: string
+  airtableTableId: string,
+  airtableButtonToken?: string
 ): Promise<void> {
   const supabase = createClient(project)
-  const { error } = await supabase.from("in_app_campaign_automations").insert({
+  const row: Record<string, unknown> = {
     campaign_id: campaignId,
     airtable_base_id: airtableBaseId,
     airtable_table_id: airtableTableId,
     is_active: true,
-  })
+  }
+  if (airtableButtonToken) row.airtable_button_token = airtableButtonToken
+  const { error } = await supabase.from("in_app_campaign_automations").insert(row)
   if (error) throw new Error(`in_app_campaign_automations insert: ${error.message}`)
 }
 

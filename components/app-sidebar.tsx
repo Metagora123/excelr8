@@ -40,6 +40,7 @@ import {
   Share2Icon,
   ZapIcon,
   ServerCogIcon,
+  Activity as ActivityIcon,
 } from "lucide-react"
 import { useSupabaseProject } from "@/lib/supabase-project-context"
 
@@ -54,9 +55,10 @@ const data = {
     { title: "File Ingestion", url: "/ingestion", icon: <UploadIcon /> },
     { title: "Dossiers", url: "/dossiers", icon: <FileTextIcon /> },
     { title: "Post Radar", url: "/radar", icon: <RadarIcon /> },
-    { title: "Post Radar Logging", url: "/radar-logging", icon: <ScrollTextIcon /> },
+    { title: "Post Radar Logging", url: "/radar-logging", icon: <ScrollTextIcon />, disabled: true },
     { title: "Campaign Manager", url: "/campaign-manager", icon: <TargetIcon /> },
     { title: "Campaign Automations", url: "/campaign-automations", icon: <ZapIcon /> },
+    { title: "Campaign Status", url: "/campaign-status", icon: <ActivityIcon /> },
     { title: "KPI Dashboard", url: "/kpi", icon: <BarChart2Icon /> },
     { title: "Newsletter", url: "/newsletter", icon: <MailIcon /> },
     { title: "HubSpot Export", url: "/hubspot", icon: <Share2Icon /> },

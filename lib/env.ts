@@ -53,6 +53,22 @@ export function getSupabaseServiceRoleKeyProd2k26(): string {
   return (getEnv("SUPABASE_SERVICE_ROLE_KEY_PROD2K26") ?? "").trim()
 }
 
+/**
+ * Public-facing base URL of the dashboard (used for Airtable button URL
+ * formulas). Falls back to a sensible default for local development so the
+ * formula still renders something the user can edit by hand.
+ */
+export function getDashboardBaseUrl(): string {
+  return (
+    getEnv("NEXT_PUBLIC_DASHBOARD_URL") ??
+    getEnv("DASHBOARD_BASE_URL") ??
+    getEnv("VERCEL_URL") ??
+    "http://localhost:3000"
+  )
+    .trim()
+    .replace(/\/+$/, "")
+}
+
 /** Unipile API key for Post Radar. */
 export function getUnipileApiKey(): string {
   return (
@@ -138,6 +154,44 @@ export function getAirtableApiKey(): string {
 /** Airtable base ID where campaign tables are created. */
 export function getAirtableBaseId(): string {
   return (getEnv("AIRTABLE_BASE_ID") ?? "").trim()
+}
+
+function normalizeAccountKey(accountName: string): string {
+  return accountName.trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "")
+}
+
+function parseAirtableBaseIdFromUrl(url: string): string {
+  const s = String(url ?? "").trim()
+  if (!s) return ""
+  const m = s.match(/airtable\.com\/(app[a-zA-Z0-9]+)/i)
+  return m?.[1] ?? ""
+}
+
+/**
+ * Optional account-specific Airtable base URL.
+ * Example env key for Yves: AIRTABLE_BASE_URL_YVES=https://airtable.com/appxxxxxx/...
+ */
+export function getAirtableBaseUrlByAccount(accountName: string): string {
+  const key = normalizeAccountKey(accountName)
+  if (!key) return ""
+  return (getEnv(`AIRTABLE_BASE_URL_${key}`) ?? "").trim()
+}
+
+/**
+ * Resolve Airtable base ID by account, with fallback to AIRTABLE_BASE_ID.
+ * - source=account: came from AIRTABLE_BASE_URL_<ACCOUNT>
+ * - source=default: fallback AIRTABLE_BASE_ID
+ */
+export function getAirtableBaseIdForAccount(
+  accountName: string
+): { baseId: string; source: "account" | "default"; envKey?: string; url?: string } {
+  const key = normalizeAccountKey(accountName)
+  const url = key ? (getEnv(`AIRTABLE_BASE_URL_${key}`) ?? "").trim() : ""
+  const fromUrl = parseAirtableBaseIdFromUrl(url)
+  if (fromUrl) {
+    return { baseId: fromUrl, source: "account", envKey: `AIRTABLE_BASE_URL_${key}`, url }
+  }
+  return { baseId: getAirtableBaseId(), source: "default" }
 }
 
 /** Optional: template table ID to clone schema for Auto Like / Comment table (same base). */

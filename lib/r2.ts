@@ -76,6 +76,32 @@ export async function getR2ObjectBody(key: string): Promise<string> {
 }
 
 /**
+ * Get the first N bytes of an object as UTF-8 string (no full download).
+ * Used for cheap title extraction from large files.
+ */
+export async function getR2ObjectHead(key: string, maxBytes = 16384): Promise<string> {
+  const client = getR2Client()
+  const res = await client.send(
+    new GetObjectCommand({
+      Bucket: BUCKET,
+      Key: key,
+      Range: `bytes=0-${maxBytes - 1}`,
+    })
+  )
+  const body = res.Body
+  if (!body) return ""
+  const chunks: Buffer[] = []
+  let total = 0
+  for await (const chunk of body as AsyncIterable<Uint8Array>) {
+    const buf = Buffer.from(chunk)
+    chunks.push(buf)
+    total += buf.length
+    if (total >= maxBytes) break
+  }
+  return Buffer.concat(chunks).toString("utf-8").slice(0, maxBytes)
+}
+
+/**
  * Filter keys to supported newsletter source documents.
  * Accept markdown and html variants (including *.temp files).
  */

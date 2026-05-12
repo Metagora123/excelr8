@@ -60,6 +60,29 @@ function getHitlistButtonFormula(project: "sales2k25" | "prod2k26"): string {
 & "&linkedin=" & ENCODE_URL_COMPONENT({LinkedIn})`
 }
 
+/**
+ * In-app Airtable button: GET to /api/airtable/trigger. The dashboard validates
+ * `{Button_Token}` against the campaign's secret and dispatches the right
+ * lifecycle action (invite / acceptance / message) based on row status.
+ *
+ * Uses NEXT_PUBLIC_DASHBOARD_URL when set (so production URLs are copied even
+ * from localhost); otherwise the current browser origin.
+ */
+function getInAppHitlistButtonFormula(): string {
+  const fromEnv =
+    typeof process !== "undefined" && process.env.NEXT_PUBLIC_DASHBOARD_URL
+      ? String(process.env.NEXT_PUBLIC_DASHBOARD_URL).trim().replace(/\/+$/, "")
+      : ""
+  const origin =
+    fromEnv ||
+    (typeof window !== "undefined" && window.location?.origin ? window.location.origin : "") ||
+    "https://YOUR-DASHBOARD-DOMAIN"
+  return `"${origin}/api/airtable/trigger"
+& "?campaign_id=" & ENCODE_URL_COMPONENT({campaign_id})
+& "&record_id=" & RECORD_ID()
+& "&token=" & ENCODE_URL_COMPONENT({Button_Token})`
+}
+
 type InlineCheckpointKey =
   | "campaign_created"
   | "leads_parsed"
@@ -107,8 +130,8 @@ export default function CampaignManagerPage() {
   const [inlineError, setInlineError] = React.useState<string | null>(null)
   const [enableAutoLike, setEnableAutoLike] = React.useState(true)
   const [enableHitlist, setEnableHitlist] = React.useState(true)
-  const [enableAutoLikeWorkflow, setEnableAutoLikeWorkflow] = React.useState(true)
-  const [enableHitlistWorkflow, setEnableHitlistWorkflow] = React.useState(true)
+  const [enableAutoLikeWorkflow, setEnableAutoLikeWorkflow] = React.useState(false)
+  const [enableHitlistWorkflow, setEnableHitlistWorkflow] = React.useState(false)
   const [enableCampaignAutomation, setEnableCampaignAutomation] = React.useState(false)
   const [inlineResult, setInlineResult] = React.useState<{
     campaignId?: string
@@ -124,10 +147,16 @@ export default function CampaignManagerPage() {
       skipCount: number
       logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>
     }
-    onDemandEnrichment?: { sent: boolean; errors: string[] }
     autoLikeZeroRowsMessage?: string
   } | null>(null)
   const [enrichmentLogs, setEnrichmentLogs] = React.useState<Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>>([])
+  // Live enrichment tracker; `currentLead` is set while a lead is mid-flight,
+  // then cleared when the final N/N beacon arrives so the bar lands at 100%.
+  const [enrichmentProgress, setEnrichmentProgress] = React.useState<{
+    done: number
+    total: number
+    currentLead: string | null
+  } | null>(null)
   const [rollback, setRollback] = React.useState<{
     airtableBaseId?: string
     airtableHitlistTableId?: string
@@ -147,10 +176,18 @@ export default function CampaignManagerPage() {
     schemaError?: string
     fields: Array<{ name: string; type: string }>
   } | null>(null)
-  const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [previewLeads, setPreviewLeads] = React.useState<Array<{
+    full_name: string | null
+    email: string | null
+    profile_url: string | null
+    existingCampaigns: Array<{ id: string; name: string | null }>
+  }>>([])
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
+  const [duplicateLookupError, setDuplicateLookupError] = React.useState<string | null>(null)
+  /** Total rows in CSV from last preview (`/api/campaign-manager/preview` `total`). Used for the >100 lead timeout warning. */
+  const [previewCsvTotal, setPreviewCsvTotal] = React.useState<number | null>(null)
   const inlineInputRef = React.useRef<HTMLInputElement>(null)
 
   const loadClients = React.useCallback(async () => {
@@ -184,6 +221,7 @@ export default function CampaignManagerPage() {
     setPreviewLeads([])
     setExcludePreviewIndices([])
     setPreviewError(null)
+    setPreviewCsvTotal(null)
   }
 
   const handlePreview = async () => {
@@ -192,17 +230,39 @@ export default function CampaignManagerPage() {
     setPreviewError(null)
     setPreviewLeads([])
     setExcludePreviewIndices([])
+    setDuplicateLookupError(null)
+    setPreviewCsvTotal(null)
     try {
       const formData = new FormData()
       formData.append("file", file)
+      formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
-      const data = (await res.json().catch(() => ({}))) as { leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null }>; error?: string }
+      const data = (await res.json().catch(() => ({}))) as {
+        leads?: Array<{
+          full_name?: string | null
+          email?: string | null
+          profile_url?: string | null
+          existingCampaigns?: Array<{ id: string; name: string | null }>
+        }>
+        total?: number
+        duplicateLookupError?: string
+        error?: string
+      }
       if (!res.ok) {
         setPreviewError(data.error || res.statusText || "Preview failed")
         return
       }
       const leads = data.leads ?? []
-      setPreviewLeads(leads.slice(0, 50).map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null })))
+      setPreviewCsvTotal(typeof data.total === "number" ? data.total : leads.length)
+      setPreviewLeads(
+        leads.slice(0, 50).map((l) => ({
+          full_name: l.full_name ?? null,
+          email: l.email ?? null,
+          profile_url: l.profile_url ?? null,
+          existingCampaigns: Array.isArray(l.existingCampaigns) ? l.existingCampaigns : [],
+        }))
+      )
+      if (data.duplicateLookupError) setDuplicateLookupError(data.duplicateLookupError)
     } catch (e) {
       setPreviewError(e instanceof Error ? e.message : "Preview failed")
     } finally {
@@ -267,6 +327,7 @@ export default function CampaignManagerPage() {
     setRollback(null)
     setRollbackMessage(null)
     setEnrichmentLogs([])
+    setEnrichmentProgress(null)
     try {
       const formData = new FormData()
       formData.append("file", file)
@@ -351,11 +412,15 @@ export default function CampaignManagerPage() {
                   obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
                     ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
                     : prev?.enrichmentSummary,
-                onDemandEnrichment:
-                  obj.onDemandEnrichment != null && typeof obj.onDemandEnrichment === "object"
-                    ? (obj.onDemandEnrichment as { sent: boolean; errors: string[] })
-                    : prev?.onDemandEnrichment,
               }))
+            }
+            if (obj.enrichment_progress != null && typeof obj.enrichment_progress === "object") {
+              const p = obj.enrichment_progress as { done?: number; total?: number; currentLead?: string | null }
+              setEnrichmentProgress({
+                done: typeof p.done === "number" ? p.done : 0,
+                total: typeof p.total === "number" ? p.total : 0,
+                currentLead: typeof p.currentLead === "string" ? p.currentLead : null,
+              })
             }
             if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
               const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
@@ -420,6 +485,14 @@ export default function CampaignManagerPage() {
                   ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
                   : prev?.enrichmentSummary,
             }))
+          }
+          if (obj.enrichment_progress != null && typeof obj.enrichment_progress === "object") {
+            const p = obj.enrichment_progress as { done?: number; total?: number; currentLead?: string | null }
+            setEnrichmentProgress({
+              done: typeof p.done === "number" ? p.done : 0,
+              total: typeof p.total === "number" ? p.total : 0,
+              currentLead: typeof p.currentLead === "string" ? p.currentLead : null,
+            })
           }
           if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
             const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
@@ -589,10 +662,19 @@ export default function CampaignManagerPage() {
           <CardHeader>
             <CardTitle>Create Campaign In-App</CardTitle>
             <CardDescription>
-              Use the form above (Supabase project, campaign name, client, category, managed by, CSV). Creates campaign in Supabase, upserts leads, fills lead–campaign links, creates Airtable tables, and duplicates n8n workflows. Checkpoints update as each step completes. When leads &gt; 25, enrichment runs via the on-demand n8n flow instead of in-app (to avoid timeout).
+              Use the form above (Supabase project, campaign name, client, category, managed by, CSV). Creates campaign in Supabase, upserts leads, fills lead–campaign links, enriches every lead in-app (live progress shown below), creates Airtable tables, and duplicates n8n workflows. Checkpoints update as each step completes.
+              {" "}
+              <span className="text-amber-700 dark:text-amber-400">
+                Use <strong>Preview cleaned leads</strong> to see total CSV row count. Lists over ~100 leads may hit the 5-minute server limit—split the file if enrichment stops early.
+              </span>
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {previewCsvTotal != null && previewCsvTotal > 100 && (
+              <p className="text-sm rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-900 dark:text-amber-100">
+                This CSV has <strong>{previewCsvTotal}</strong> rows. In-app enrichment is capped by a ~5-minute server window; very large lists may time out before every lead finishes. Consider splitting into two uploads if you see incomplete enrichment.
+              </p>
+            )}
             <div className="flex flex-wrap gap-6">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
@@ -612,24 +694,29 @@ export default function CampaignManagerPage() {
                 />
                 <span className="text-sm font-medium">Hitlist (invites / messages)</span>
               </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableAutoLikeWorkflow}
-                  onChange={(e) => setEnableAutoLikeWorkflow(e.target.checked)}
-                  className="h-4 w-4 rounded border-input"
-                />
-                <span className="text-sm font-medium">Auto Like / Auto Comment n8n workflow</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableHitlistWorkflow}
-                  onChange={(e) => setEnableHitlistWorkflow(e.target.checked)}
-                  className="h-4 w-4 rounded border-input"
-                />
-                <span className="text-sm font-medium">Hitlist n8n workflow</span>
-              </label>
+              <div className="flex flex-wrap gap-6 opacity-50 grayscale pointer-events-none select-none" aria-disabled="true" title="n8n workflow duplication is currently disabled">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled
+                    readOnly
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm font-medium">Auto Like / Auto Comment n8n workflow</span>
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={false}
+                    disabled
+                    readOnly
+                    className="h-4 w-4 rounded border-input"
+                  />
+                  <span className="text-sm font-medium">Hitlist n8n workflow</span>
+                </label>
+              </div>
+              <span className="text-xs text-muted-foreground basis-full">n8n workflow duplication is currently disabled.</span>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -656,7 +743,25 @@ export default function CampaignManagerPage() {
             {previewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
                 <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
-                <p className="text-xs text-muted-foreground">Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create.</p>
+                <p className="text-xs text-muted-foreground">
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create. Rows highlighted in yellow already belong to another campaign (matched by LinkedIn URL).
+                </p>
+                {duplicateLookupError && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    Duplicate lookup failed ({duplicateLookupError}). Showing leads without cross-campaign info.
+                  </p>
+                )}
+                {(() => {
+                  const visibleDuplicates = previewLeads.filter(
+                    (row, i) => !excludePreviewIndices.includes(i) && row.existingCampaigns.length > 0
+                  ).length
+                  if (visibleDuplicates === 0) return null
+                  return (
+                    <p className="text-xs text-amber-700 dark:text-amber-400">
+                      {visibleDuplicates} row{visibleDuplicates === 1 ? "" : "s"} already in other campaigns.
+                    </p>
+                  )
+                })()}
                 <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
                   <table className="w-full text-xs border-collapse">
                     <thead className="sticky top-0 bg-muted/80">
@@ -664,6 +769,7 @@ export default function CampaignManagerPage() {
                         <th className="text-left p-2 font-medium">Enrich_person</th>
                         <th className="text-left p-2 font-medium">A Email</th>
                         <th className="text-left p-2 font-medium">LinkedIn</th>
+                        <th className="text-left p-2 font-medium">In campaigns</th>
                         <th className="w-8 p-2" aria-label="Remove" />
                       </tr>
                     </thead>
@@ -671,25 +777,55 @@ export default function CampaignManagerPage() {
                       {previewLeads
                         .map((row, i) => ({ row, i }))
                         .filter(({ i }) => !excludePreviewIndices.includes(i))
-                        .map(({ row, i }) => (
-                          <tr key={i} className="border-t border-border">
-                            <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
-                            <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
-                            <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
-                            <td className="p-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="icon"
-                                className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                                onClick={() => removeLeadFromPreview(i)}
-                                title="Remove this lead from campaign"
-                              >
-                                <Trash2Icon className="h-3.5 w-3.5" />
-                              </Button>
-                            </td>
-                          </tr>
-                        ))}
+                        .map(({ row, i }) => {
+                          const isDuplicate = row.existingCampaigns.length > 0
+                          return (
+                            <tr
+                              key={i}
+                              className={`border-t border-border ${
+                                isDuplicate ? "bg-amber-100/70 dark:bg-amber-500/15" : ""
+                              }`}
+                            >
+                              <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
+                              <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
+                              <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                              <td className="p-2 max-w-[220px]">
+                                {isDuplicate ? (
+                                  <div className="flex flex-wrap gap-1">
+                                    {row.existingCampaigns.slice(0, 3).map((c) => (
+                                      <span
+                                        key={c.id}
+                                        title={c.id}
+                                        className="inline-flex items-center rounded border border-amber-400/60 bg-amber-50 dark:bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-mono text-amber-700 dark:text-amber-300"
+                                      >
+                                        {c.name && c.name.length > 0 ? c.name.slice(0, 28) : c.id.slice(0, 8)}
+                                      </span>
+                                    ))}
+                                    {row.existingCampaigns.length > 3 && (
+                                      <span className="text-[10px] text-muted-foreground">
+                                        +{row.existingCampaigns.length - 3} more
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground">—</span>
+                                )}
+                              </td>
+                              <td className="p-2">
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                                  onClick={() => removeLeadFromPreview(i)}
+                                  title="Remove this lead from campaign"
+                                >
+                                  <Trash2Icon className="h-3.5 w-3.5" />
+                                </Button>
+                              </td>
+                            </tr>
+                          )
+                        })}
                     </tbody>
                   </table>
                 </div>
@@ -701,6 +837,34 @@ export default function CampaignManagerPage() {
                     )}
                   </>
                 )}
+              </div>
+            )}
+            {enrichmentProgress && enrichmentProgress.total > 0 && (
+              <div className="space-y-2 rounded-md border bg-muted/30 p-3">
+                <div className="flex items-center justify-between text-sm">
+                  <Label className="m-0">Enriching leads</Label>
+                  <span className="font-mono text-xs text-muted-foreground">
+                    {enrichmentProgress.done}/{enrichmentProgress.total}
+                  </span>
+                </div>
+                <div className="h-2 w-full overflow-hidden rounded bg-muted">
+                  <div
+                    className="h-full bg-primary transition-all duration-300"
+                    style={{
+                      width: `${Math.min(
+                        100,
+                        Math.round((enrichmentProgress.done / Math.max(1, enrichmentProgress.total)) * 100)
+                      )}%`,
+                    }}
+                  />
+                </div>
+                <p className="truncate text-xs text-muted-foreground" title={enrichmentProgress.currentLead ?? undefined}>
+                  {enrichmentProgress.currentLead
+                    ? `Currently enriching: ${enrichmentProgress.currentLead}`
+                    : enrichmentProgress.done >= enrichmentProgress.total
+                      ? "Done."
+                      : "Working…"}
+                </p>
               </div>
             )}
             <div className="space-y-2">
@@ -737,30 +901,10 @@ export default function CampaignManagerPage() {
                 {inlineResult.leadsCount != null && (
                   <p>Leads: {inlineResult.leadsCount}</p>
                 )}
-                {(inlineResult.enrichmentSummary || inlineResult.onDemandEnrichment || enrichmentLogs.length > 0) && (
+                {(inlineResult.enrichmentSummary || enrichmentLogs.length > 0) && (
                   <div className="rounded border border-border/50 bg-muted/20 p-2 space-y-1">
                     <p className="font-medium text-muted-foreground">Enrichment</p>
-                    {inlineResult.onDemandEnrichment ? (
-                      <>
-                        <p className="text-xs">
-                          {inlineResult.onDemandEnrichment.sent ? (
-                            <span className="text-green-600 dark:text-green-400">Sent to on-demand n8n flow</span>
-                          ) : (
-                            <span className="text-destructive">On-demand n8n trigger failed</span>
-                          )}
-                          {inlineResult.onDemandEnrichment.errors.length > 0 && (
-                            <span className="text-muted-foreground ml-2">({inlineResult.onDemandEnrichment.errors.length} error(s))</span>
-                          )}
-                        </p>
-                        {inlineResult.onDemandEnrichment.errors.length > 0 && (
-                          <ul className="text-xs text-muted-foreground list-disc list-inside max-h-20 overflow-y-auto">
-                            {inlineResult.onDemandEnrichment.errors.map((err, i) => (
-                              <li key={i}>{err}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </>
-                    ) : inlineResult.enrichmentSummary ? (
+                    {inlineResult.enrichmentSummary ? (
                       <>
                         <p className="text-xs">
                           <span className="text-green-600 dark:text-green-400">{inlineResult.enrichmentSummary.enrichedCount} enriched</span>
@@ -1102,7 +1246,7 @@ export default function CampaignManagerPage() {
               </div>
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <p className="font-medium text-xs">Hitlist URL formula</p>
+                  <p className="font-medium text-xs">Hitlist URL formula (n8n button)</p>
                   <Button
                     type="button"
                     size="sm"
@@ -1117,6 +1261,33 @@ export default function CampaignManagerPage() {
                 </div>
                 <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
                   {getHitlistButtonFormula(supabaseProject)}
+                </pre>
+              </div>
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <p className="font-medium text-xs">Hitlist URL formula (in-app button)</p>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={() => {
+                      void navigator.clipboard.writeText(getInAppHitlistButtonFormula())
+                    }}
+                  >
+                    Copy formula
+                  </Button>
+                </div>
+                <p className="text-muted-foreground">
+                  Paste into a NEW button column (e.g. <code className="bg-muted px-0.5 rounded">In_App_Button</code>) in Airtable. Clicking it sends the request straight to this dashboard — no n8n hop — and the dashboard decides whether to invite, check acceptance, or send the next message based on the row’s current status.
+                </p>
+                <p className="text-xs text-amber-800 dark:text-amber-200/90 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5">
+                  If you copy this while running the app on <strong>localhost</strong>, the formula will point at localhost unless you set{" "}
+                  <code className="bg-muted px-0.5 rounded">NEXT_PUBLIC_DASHBOARD_URL</code> to your live site (e.g.{" "}
+                  <code className="bg-muted px-0.5 rounded">https://celr8.vercel.app</code>) in <code className="bg-muted px-0.5 rounded">.env</code> and rebuild. That value is preferred over the browser origin so Airtable buttons hit production.
+                </p>
+                <pre className="whitespace-pre-wrap break-words rounded bg-muted p-2 text-[11px] font-mono">
+                  {getInAppHitlistButtonFormula()}
                 </pre>
               </div>
             </div>

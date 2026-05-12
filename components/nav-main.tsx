@@ -17,6 +17,7 @@ export function NavMain({
     title: string
     url: string
     icon?: React.ReactNode
+    disabled?: boolean
   }[]
 }) {
   const pathname = usePathname()
@@ -26,12 +27,24 @@ export function NavMain({
         <SidebarMenu>
           {items.map((item) => (
             <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton tooltip={item.title} asChild isActive={pathname === item.url}>
-                <Link href={item.url}>
+              {item.disabled ? (
+                <SidebarMenuButton
+                  tooltip={`${item.title} (disabled)`}
+                  isActive={false}
+                  aria-disabled="true"
+                  className="opacity-50 grayscale pointer-events-none cursor-not-allowed"
+                >
                   {item.icon}
                   <span>{item.title}</span>
-                </Link>
-              </SidebarMenuButton>
+                </SidebarMenuButton>
+              ) : (
+                <SidebarMenuButton tooltip={item.title} asChild isActive={pathname === item.url}>
+                  <Link href={item.url}>
+                    {item.icon}
+                    <span>{item.title}</span>
+                  </Link>
+                </SidebarMenuButton>
+              )}
             </SidebarMenuItem>
           ))}
         </SidebarMenu>

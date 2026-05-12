@@ -14,8 +14,8 @@ import {
 import { generate4Comments } from "@/lib/autoCommentGenerator"
 import {
   resolveIdentifierFromProfileUrl,
-  fetchUnipileProfile,
-  searchUnipilePeople,
+  fetchUnipileProfileWithDetails,
+  searchUnipilePeopleWithDetails,
   fetchUnipilePosts,
 } from "@/lib/enrichment-engine"
 
@@ -53,6 +53,15 @@ export type AutoCommentRunLogEntry = {
     monitored?: boolean
     new_posts_supabase?: number
     new_posts_airtable?: number
+    api_calls?: Array<{
+      step: string
+      url: string
+      params?: Record<string, string>
+      statusCode?: number
+      result?: string
+      error?: string
+      responseSnippet?: string
+    }>
   }>
 }
 
@@ -339,6 +348,7 @@ export async function runAutoCommentMonitoringAutomation(
         const lead = leadsById.get(leadId)
         const leadName = safeText(lead?.full_name) || leadId
         const profileUrl = safeText(lead?.profile_url)
+        const apiCalls: NonNullable<NonNullable<AutoCommentRunLogEntry["records"]>[number]["api_calls"]> = []
         if (!profileUrl) {
           runEntry.records?.push({
             mode: "monitoring",
@@ -346,6 +356,7 @@ export async function runAutoCommentMonitoringAutomation(
             lead_name: leadName,
             monitored: false,
             error: "Missing profile_url",
+            api_calls: apiCalls,
           })
           continue
         }
@@ -354,14 +365,39 @@ export async function runAutoCommentMonitoringAutomation(
         const { identifier, latestNameIdentifier } = resolveIdentifierFromProfileUrl(profileUrl)
         let providerId: string | null = null
         if (identifier) {
-          const profile = await fetchUnipileProfile(identifier)
-          if (profile?.provider_id) providerId = profile.provider_id
+          const details = await fetchUnipileProfileWithDetails(identifier)
+          apiCalls.push({
+            step: "profile_by_identifier",
+            url: `/api/v1/users/${encodeURIComponent(identifier)}`,
+            params: { linkedin_sections: "*", account_id: "env" },
+            statusCode: details.statusCode,
+            result: details.profile?.provider_id ? "provider_found" : "provider_missing",
+            responseSnippet: details.responseSnippet,
+          })
+          if (details.profile?.provider_id) providerId = details.profile.provider_id
         }
         if (!providerId && latestNameIdentifier) {
-          const results = await searchUnipilePeople(latestNameIdentifier)
-          if (results.length > 0) {
-            const profile = await fetchUnipileProfile(results[0].id)
-            if (profile?.provider_id) providerId = profile.provider_id
+          const searchDetails = await searchUnipilePeopleWithDetails(latestNameIdentifier)
+          apiCalls.push({
+            step: "search_people",
+            url: searchDetails.requestPath,
+            params: searchDetails.requestBody,
+            statusCode: searchDetails.statusCode,
+            result: `results:${searchDetails.items.length}`,
+            responseSnippet: searchDetails.responseSnippet,
+          })
+          if (searchDetails.items.length > 0) {
+            const lookupId = searchDetails.items[0].id
+            const profileDetails = await fetchUnipileProfileWithDetails(lookupId)
+            apiCalls.push({
+              step: "profile_by_search_result",
+              url: `/api/v1/users/${encodeURIComponent(lookupId)}`,
+              params: { linkedin_sections: "*", account_id: "env" },
+              statusCode: profileDetails.statusCode,
+              result: profileDetails.profile?.provider_id ? "provider_found" : "provider_missing",
+              responseSnippet: profileDetails.responseSnippet,
+            })
+            if (profileDetails.profile?.provider_id) providerId = profileDetails.profile.provider_id
           }
         }
         if (!providerId) {
@@ -371,11 +407,18 @@ export async function runAutoCommentMonitoringAutomation(
             lead_name: leadName,
             monitored: true,
             error: "Unipile profile not found",
+            api_calls: apiCalls,
           })
           continue
         }
 
         const posts = await fetchUnipilePosts(providerId)
+        apiCalls.push({
+          step: "fetch_posts",
+          url: `/api/v1/users/${encodeURIComponent(providerId)}/posts`,
+          params: { limit: "5", is_company: "false", account_id: "env" },
+          result: `posts:${posts.length}`,
+        })
         const existingSupabase = existingSupabaseByLead.get(leadId) ?? { ids: new Set<string>(), urls: new Set<string>() }
         let leadNewSupabase = 0
         let leadNewAirtable = 0
@@ -458,6 +501,7 @@ export async function runAutoCommentMonitoringAutomation(
           new_posts_supabase: leadNewSupabase,
           new_posts_airtable: leadNewAirtable,
           skipped_existing: Math.max(0, posts.length - leadNewAirtable),
+          api_calls: apiCalls,
         })
       }
 

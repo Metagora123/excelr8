@@ -31,8 +31,27 @@ export function resolveIdentifierFromProfileUrl(profileUrl: string): {
 } {
   const trimmed = (profileUrl ?? "").trim()
   if (!trimmed) return { identifier: null, latestNameIdentifier: null }
-  const parts = trimmed.split("/in/")
-  const identifier = parts[1] ? parts[1].replace(/\/$/, "").trim() : null
+  const normalized =
+    trimmed.startsWith("http://") || trimmed.startsWith("https://")
+      ? trimmed
+      : `https://${trimmed.replace(/^\/*/, "")}`
+  let path = ""
+  try {
+    path = new URL(normalized).pathname
+  } catch {
+    // Fallback for malformed URL-like inputs.
+    path = trimmed
+  }
+  const inIndex = path.indexOf("/in/")
+  const rawSlug =
+    inIndex >= 0
+      ? path.slice(inIndex + 4)
+      : path.replace(/^\/+/, "")
+  const identifier = rawSlug
+    .replace(/[?#].*$/, "")
+    .replace(/\/.*$/, "")
+    .replace(/\/$/, "")
+    .trim()
   if (!identifier) return { identifier: null, latestNameIdentifier: null }
   const nameIdentifier = identifier.replace(/-\d+[a-z0-9]*$/i, "")
   const words = nameIdentifier.split("-")
@@ -40,10 +59,22 @@ export function resolveIdentifierFromProfileUrl(profileUrl: string): {
   return { identifier, latestNameIdentifier }
 }
 
+function buildSearchKeywords(lead: NormalizedLead, latestNameIdentifier: string | null): string[] {
+  const out = new Set<string>()
+  const fullName = (lead.full_name ?? "").trim()
+  const company = (lead.company_name ?? "").trim()
+  if (latestNameIdentifier) out.add(latestNameIdentifier)
+  if (fullName) out.add(fullName)
+  if (fullName && company) out.add(`${fullName} ${company}`)
+  if (fullName) out.add(fullName.replace(/\s+/g, "-").toLowerCase())
+  return Array.from(out).filter(Boolean)
+}
+
 /** Unipile profile (subset we use). */
 type UnipileProfile = {
   provider_id?: string
   headline?: string
+  summary?: string
   work_experience?: Array<{ company?: string }>
   follower_count?: number
   connections_count?: number
@@ -123,6 +154,40 @@ export async function sendUnipileInvite(
   return { ok: result.ok, error: result.error }
 }
 
+/**
+ * POST /api/v1/chats — send a LinkedIn DM to a 1st-degree connection.
+ *
+ * Unipile dedupes the chat by attendee, so calling this for M1/M2/M3 simply
+ * appends new messages to the existing thread. If the lead un-accepted the
+ * connection between passes, Unipile returns a non-2xx and the messaging pass
+ * decides transient-vs-permanent via the shared `isTransient` heuristic.
+ */
+export async function sendUnipileMessageWithDetails(
+  accountId: string,
+  providerId: string,
+  text: string
+): Promise<{
+  ok: boolean
+  statusCode: number
+  responseSnippet: string
+  error?: string
+}> {
+  const res = await unipileFetch("/api/v1/chats", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      account_id: accountId,
+      attendees_ids: [providerId],
+      text,
+    }),
+  })
+  const rawText = await res.text()
+  const responseSnippet =
+    rawText.length > MAX_RESPONSE_SNIPPET ? rawText.slice(0, MAX_RESPONSE_SNIPPET) + "…" : rawText
+  if (res.ok) return { ok: true, statusCode: res.status, responseSnippet }
+  return { ok: false, statusCode: res.status, responseSnippet, error: `${res.status}: ${rawText}` }
+}
+
 /** POST /api/v1/users/invite with status and response for logging. */
 export async function sendUnipileInviteWithDetails(
   accountId: string,
@@ -151,19 +216,52 @@ export async function sendUnipileInviteWithDetails(
 
 /** POST /api/v1/linkedin/search (people by keywords) */
 export async function searchUnipilePeople(keywords: string): Promise<Array<{ id: string }>> {
+  const details = await searchUnipilePeopleWithDetails(keywords)
+  return details.items
+}
+
+/** POST /api/v1/linkedin/search with status and response snippet for diagnostics. */
+export async function searchUnipilePeopleWithDetails(keywords: string): Promise<{
+  items: Array<{ id: string }>
+  statusCode: number
+  responseSnippet: string
+  requestPath: string
+  requestBody: Record<string, string>
+}> {
   const accountId = getUnipileAccountId()
-  const res = await unipileFetch(
-    `/api/v1/linkedin/search?limit=2&account_id=${encodeURIComponent(accountId)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ api: "classic", category: "people", keywords }),
+  const requestPath = `/api/v1/linkedin/search?limit=2&account_id=${encodeURIComponent(accountId)}`
+  const requestBody = { api: "classic", category: "people", keywords }
+  const res = await unipileFetch(requestPath, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(requestBody),
+  })
+  const rawText = await res.text()
+  const responseSnippet =
+    rawText.length > MAX_RESPONSE_SNIPPET ? rawText.slice(0, MAX_RESPONSE_SNIPPET) + "…" : rawText
+  if (!res.ok) {
+    return {
+      items: [],
+      statusCode: res.status,
+      responseSnippet,
+      requestPath,
+      requestBody,
     }
-  )
-  if (!res.ok) return []
-  const data = (await res.json()) as { items?: Array<{ id?: string }> }
-  const items = data?.items ?? []
-  return items.filter((i) => i.id).map((i) => ({ id: i.id! }))
+  }
+  let items: Array<{ id?: string }> = []
+  try {
+    const data = JSON.parse(rawText) as { items?: Array<{ id?: string }> }
+    items = data?.items ?? []
+  } catch {
+    items = []
+  }
+  return {
+    items: items.filter((i) => i.id).map((i) => ({ id: i.id! })),
+    statusCode: res.status,
+    responseSnippet,
+    requestPath,
+    requestBody,
+  }
 }
 
 /** GET /api/v1/users/{{ providerId }}/posts */
@@ -249,6 +347,13 @@ async function updateLeadIdentifier(
   }
   if (profile) {
     if (profile.headline != null) row.description = profile.headline
+    const summaryText =
+      typeof profile.summary === "string" && profile.summary.trim()
+        ? profile.summary.trim()
+        : typeof (profile as Record<string, unknown>)["about"] === "string"
+          ? String((profile as Record<string, unknown>)["about"]).trim()
+          : null
+    if (summaryText) row.about_summary = summaryText
     if (profile.work_experience?.[0]?.company != null) row.company_name = profile.work_experience[0].company
     if (profile.follower_count != null) row.followers_count = profile.follower_count
     if (profile.connections_count != null) row.connections_count = profile.connections_count
@@ -298,12 +403,17 @@ export async function runEnrichmentForLead(
     if (profile?.provider_id) providerId = profile.provider_id
   }
 
-  if (!providerId && latestNameIdentifier) {
-    const searchResults = await searchUnipilePeople(latestNameIdentifier)
-    if (searchResults.length > 0) {
+  if (!providerId) {
+    const searchKeywords = buildSearchKeywords(lead, latestNameIdentifier)
+    for (const keywords of searchKeywords) {
+      const searchResults = await searchUnipilePeople(keywords)
+      if (searchResults.length === 0) continue
       const searchId = searchResults[0].id
       profile = await fetchUnipileProfile(searchId)
-      if (profile?.provider_id) providerId = profile.provider_id
+      if (profile?.provider_id) {
+        providerId = profile.provider_id
+        break
+      }
     }
   }
 
@@ -382,18 +492,37 @@ export async function runEnrichmentForCampaign(
   let enrichedCount = 0
   let failedCount = 0
   let skipCount = 0
+  const total = normalized.length
+  let processed = 0
 
-  for (const lead of normalized) {
+  // Initial progress beacon so the UI can render the bar from 0/N.
+  streamLine({ enrichment_progress: { done: 0, total, currentLead: null } })
+
+  for (let i = 0; i < normalized.length; i++) {
+    const lead = normalized[i]
     const profileUrl = (lead.profile_url ?? "").trim()
+    const leadName = lead.full_name ?? null
+
+    streamLine({
+      enrichment_progress: {
+        done: processed,
+        total,
+        currentLead: leadName ?? profileUrl ?? `Row ${i + 1}`,
+        index: i + 1,
+      },
+    })
+
     if (!profileUrl) {
       skipCount++
-      streamLog({ type: "skip", profile_url: "", full_name: lead.full_name ?? null, message: "No profile_url" })
+      streamLog({ type: "skip", profile_url: "", full_name: leadName, message: "No profile_url" })
+      processed++
       continue
     }
     const leadId = leadIdsByProfileUrl.get(profileUrl)
     if (!leadId) {
       skipCount++
-      streamLog({ type: "skip", profile_url: profileUrl, full_name: lead.full_name ?? null, message: "Lead id not found" })
+      streamLog({ type: "skip", profile_url: profileUrl, full_name: leadName, message: "Lead id not found" })
+      processed++
       continue
     }
 
@@ -404,9 +533,13 @@ export async function runEnrichmentForCampaign(
     } catch (e) {
       failedCount++
       const msg = e instanceof Error ? e.message : String(e)
-      streamLog({ type: "failed", profile_url: profileUrl, full_name: lead.full_name ?? null, message: msg })
+      streamLog({ type: "failed", profile_url: profileUrl, full_name: leadName, message: msg })
     }
+    processed++
   }
+
+  // Final beacon shows N/N so the bar lands at 100%.
+  streamLine({ enrichment_progress: { done: total, total, currentLead: null } })
 
   const summary: EnrichmentSummary = { enrichedCount, failedCount, skipCount, logs }
   streamLine({ enrichment_summary: summary })

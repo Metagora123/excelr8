@@ -32,7 +32,8 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet"
-import { Trash2Icon, PlayIcon, ExternalLinkIcon, FileTextIcon } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Trash2Icon, PlayIcon, ExternalLinkIcon, FileTextIcon, SendIcon } from "lucide-react"
 import { useSupabaseProject } from "@/lib/supabase-project-context"
 
 const SCHEDULE_OPTIONS: { value: string; label: string }[] = [
@@ -91,6 +92,22 @@ type AutomationRow = {
   campaign_messages_sent?: number | null
   campaign_comments_made?: number | null
   campaign_likes_reactions?: number | null
+  // In-app messaging (Block 2)
+  messaging_runner?: "off" | "in_app"
+  messaging_quota_daily?: number
+  messages_sent_today?: number
+  messages_sent_today_date?: string | null
+}
+
+type MessagingProgress = {
+  processed: number
+  total: number
+  current?: string
+  finished?: boolean
+  messages_sent?: number
+  messaging_failed?: number
+  retry_pending?: number
+  error?: string
 }
 
 type AutoCommentRunLog = {
@@ -113,6 +130,15 @@ type AutoCommentRunLog = {
     new_posts_airtable?: number
     new_posts_added?: number
     skipped_existing?: number
+    api_calls?: Array<{
+      step?: string
+      url?: string
+      params?: Record<string, string>
+      statusCode?: number
+      result?: string
+      error?: string
+      responseSnippet?: string
+    }>
   }>
   mode?: "comment_generation" | "monitoring"
   discovered_count?: number
@@ -146,6 +172,9 @@ export default function CampaignAutomationsPage() {
   const [autoCommentMonitoringId, setAutoCommentMonitoringId] = React.useState<string | null>(null)
   const [autoCommentSuccessId, setAutoCommentSuccessId] = React.useState<string | null>(null)
   const [autoCommentMonitoringSuccessId, setAutoCommentMonitoringSuccessId] = React.useState<string | null>(null)
+  const [messagingRunningId, setMessagingRunningId] = React.useState<string | null>(null)
+  const [messagingProgress, setMessagingProgress] = React.useState<Record<string, MessagingProgress>>({})
+  const [quotaDrafts, setQuotaDrafts] = React.useState<Record<string, string>>({})
   const { project } = useSupabaseProject()
 
   const load = React.useCallback(async () => {
@@ -315,6 +344,150 @@ export default function CampaignAutomationsPage() {
     }
   }
 
+  const handleToggleMessaging = async (id: string, next: "off" | "in_app") => {
+    setError(null)
+    // Optimistic flip; reverted on PATCH failure.
+    setAutomations((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, messaging_runner: next } : a))
+    )
+    try {
+      const res = await fetch(
+        `/api/campaign-automations/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messaging_runner: next }),
+        }
+      )
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setError(data.error || res.statusText || "Toggle failed")
+        setAutomations((prev) =>
+          prev.map((a) =>
+            a.id === id ? { ...a, messaging_runner: next === "in_app" ? "off" : "in_app" } : a
+          )
+        )
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Toggle failed")
+      setAutomations((prev) =>
+        prev.map((a) =>
+          a.id === id ? { ...a, messaging_runner: next === "in_app" ? "off" : "in_app" } : a
+        )
+      )
+    }
+  }
+
+  const handleQuotaCommit = async (id: string) => {
+    const raw = quotaDrafts[id]
+    if (raw == null) return
+    const n = Math.max(0, Math.min(200, Math.floor(Number(raw) || 0)))
+    setError(null)
+    setAutomations((prev) =>
+      prev.map((a) => (a.id === id ? { ...a, messaging_quota_daily: n } : a))
+    )
+    setQuotaDrafts((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+    try {
+      const res = await fetch(
+        `/api/campaign-automations/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messaging_quota_daily: n }),
+        }
+      )
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        setError(data.error || res.statusText || "Quota update failed")
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Quota update failed")
+    }
+  }
+
+  const handleRunMessagingNow = async (id: string) => {
+    setMessagingRunningId(id)
+    setError(null)
+    setMessagingProgress((prev) => ({ ...prev, [id]: { processed: 0, total: 0 } }))
+    try {
+      const res = await fetch(
+        `/api/campaign-automations/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}&action=run-messaging`,
+        { method: "POST" }
+      )
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}))
+        setError(data.error || res.statusText || "Messaging run failed")
+        setMessagingProgress((prev) => ({
+          ...prev,
+          [id]: { ...(prev[id] ?? { processed: 0, total: 0 }), finished: true, error: data.error ?? res.statusText },
+        }))
+        return
+      }
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ""
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split("\n")
+        buffer = lines.pop() ?? ""
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const obj = JSON.parse(line) as Record<string, unknown>
+            if (obj.phase === "progress") {
+              setMessagingProgress((prev) => ({
+                ...prev,
+                [id]: {
+                  processed: Number(obj.processed ?? 0),
+                  total: Number(obj.total ?? 0),
+                  current: typeof obj.current === "string" ? obj.current : undefined,
+                },
+              }))
+            } else if (obj.phase === "completed") {
+              setMessagingProgress((prev) => ({
+                ...prev,
+                [id]: {
+                  ...(prev[id] ?? { processed: 0, total: 0 }),
+                  finished: true,
+                  messages_sent: Number(obj.messages_sent ?? 0),
+                  messaging_failed: Number(obj.messaging_failed ?? 0),
+                  retry_pending: Number(obj.retry_pending ?? 0),
+                },
+              }))
+            } else if (obj.phase === "error") {
+              setMessagingProgress((prev) => ({
+                ...prev,
+                [id]: {
+                  ...(prev[id] ?? { processed: 0, total: 0 }),
+                  finished: true,
+                  error: typeof obj.error === "string" ? obj.error : "Run failed",
+                },
+              }))
+            }
+          } catch {
+            // ignore malformed line
+          }
+        }
+      }
+      await load()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Messaging run failed"
+      setError(msg)
+      setMessagingProgress((prev) => ({
+        ...prev,
+        [id]: { ...(prev[id] ?? { processed: 0, total: 0 }), finished: true, error: msg },
+      }))
+    } finally {
+      setMessagingRunningId(null)
+    }
+  }
+
   const formatDate = (s: string | null | undefined) =>
     s ? new Date(s).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "—"
 
@@ -366,6 +539,7 @@ export default function CampaignAutomationsPage() {
                     <TableHead>Status</TableHead>
                     <TableHead>Last run</TableHead>
                     <TableHead>Campaign table (campaigns)</TableHead>
+                    <TableHead>In-app messaging</TableHead>
                     <TableHead>Airtable</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
@@ -422,6 +596,62 @@ export default function CampaignAutomationsPage() {
                         <span className="block">Invites: {(a.campaign_invites_sent ?? 0).toLocaleString()}</span>
                         <span className="block">Messages: {(a.campaign_messages_sent ?? 0).toLocaleString()}</span>
                         <span className="block">Comments: {(a.campaign_comments_made ?? 0).toLocaleString()} · Likes: {(a.campaign_likes_reactions ?? 0).toLocaleString()}</span>
+                      </TableCell>
+                      <TableCell className="min-w-[210px]">
+                        <div className="flex flex-col gap-1 text-xs">
+                          <label className="inline-flex items-center gap-2 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={a.messaging_runner === "in_app"}
+                              onChange={(e) =>
+                                handleToggleMessaging(a.id, e.target.checked ? "in_app" : "off")
+                              }
+                              className="h-3.5 w-3.5 rounded border-input"
+                            />
+                            <span className="font-medium">
+                              {a.messaging_runner === "in_app" ? "On" : "Off"}
+                            </span>
+                            <span className="text-muted-foreground">
+                              · {(a.messages_sent_today ?? 0)}/{a.messaging_quota_daily ?? 30} today
+                            </span>
+                          </label>
+                          <div className="flex items-center gap-1">
+                            <span className="text-muted-foreground">Quota</span>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={200}
+                              className="h-7 w-16 text-xs"
+                              value={
+                                quotaDrafts[a.id] ??
+                                String(a.messaging_quota_daily ?? 30)
+                              }
+                              onChange={(e) =>
+                                setQuotaDrafts((prev) => ({ ...prev, [a.id]: e.target.value }))
+                              }
+                              onBlur={() => {
+                                if (quotaDrafts[a.id] != null) handleQuotaCommit(a.id)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") (e.target as HTMLInputElement).blur()
+                              }}
+                            />
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-7 px-2"
+                              disabled={messagingRunningId === a.id}
+                              onClick={() => handleRunMessagingNow(a.id)}
+                              title="Send any due messages now (bypasses the daily cron)"
+                            >
+                              <SendIcon className="h-3 w-3 mr-1" />
+                              {messagingRunningId === a.id ? "Running…" : "Run now"}
+                            </Button>
+                          </div>
+                          {messagingProgress[a.id] && (
+                            <MessagingProgressBlock progress={messagingProgress[a.id]!} />
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <a
@@ -765,6 +995,16 @@ function AutoCommentLogsPreview({
                         {rec.error != null && (
                           <div className="text-destructive">{rec.error}</div>
                         )}
+                        {Array.isArray(rec.api_calls) && rec.api_calls.length > 0 && (
+                          <details className="mt-1">
+                            <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+                              Detailed logs (API calls)
+                            </summary>
+                            <pre className="mt-1 p-2 rounded bg-muted text-[10px] overflow-x-auto max-h-40 overflow-y-auto whitespace-pre-wrap break-all">
+                              {JSON.stringify(rec.api_calls, null, 2)}
+                            </pre>
+                          </details>
+                        )}
                       </div>
                     ))
                   : records.map((rec, j) => (
@@ -785,6 +1025,52 @@ function AutoCommentLogsPreview({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+function MessagingProgressBlock({ progress }: { progress: MessagingProgress }) {
+  const pct =
+    progress.total > 0
+      ? Math.min(100, Math.round((progress.processed / progress.total) * 100))
+      : progress.finished
+        ? 100
+        : 0
+  return (
+    <div className="rounded border bg-muted/40 px-2 py-1.5 text-[11px] space-y-1">
+      {progress.error ? (
+        <span className="text-destructive">{progress.error}</span>
+      ) : progress.finished ? (
+        <span className="text-green-600 dark:text-green-400">
+          Done — sent {progress.messages_sent ?? 0}
+          {progress.messaging_failed != null && progress.messaging_failed > 0
+            ? ` · failed ${progress.messaging_failed}`
+            : ""}
+          {progress.retry_pending != null && progress.retry_pending > 0
+            ? ` · retry ${progress.retry_pending}`
+            : ""}
+        </span>
+      ) : (
+        <>
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">
+              {progress.processed}/{progress.total || "?"}
+            </span>
+            <span
+              className="truncate max-w-[140px] text-muted-foreground"
+              title={progress.current ?? ""}
+            >
+              {progress.current ?? "Working…"}
+            </span>
+          </div>
+          <div className="h-1 w-full overflow-hidden rounded bg-muted">
+            <div
+              className="h-full bg-primary transition-all duration-300"
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </>
+      )}
     </div>
   )
 }
@@ -841,7 +1127,7 @@ function LogsPreview({
                 </span>
                 {(run.invited_count != null || run.to_be_messaged_count != null || run.rejected_count != null) && (
                   <span className="text-xs text-muted-foreground">
-                    invited: {run.invited_count ?? 0} · invite failed: {run.to_be_messaged_count ?? 0} · rejected: {run.rejected_count ?? 0}
+                    invited: {run.invited_count ?? 0} · accepted: {run.to_be_messaged_count ?? 0} · invite failed: {run.rejected_count ?? 0}
                   </span>
                 )}
               </div>

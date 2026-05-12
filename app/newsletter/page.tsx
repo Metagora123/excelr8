@@ -38,7 +38,12 @@ const CHECKPOINTS: { key: string; label: string }[] = [
 ]
 
 export default function NewsletterPage() {
-  type NewsletterFileItem = { key: string; used: boolean }
+  type NewsletterFileItem = {
+    key: string
+    used: boolean
+    displayTitle?: string
+    titleSource?: "html-title" | "h1" | "md-h1" | "filename"
+  }
   const [dateFolders, setDateFolders] = React.useState<string[]>([])
   const [selectedDate, setSelectedDate] = React.useState("")
   const [dateFoldersLoading, setDateFoldersLoading] = React.useState(true)
@@ -63,6 +68,125 @@ export default function NewsletterPage() {
   const [htmlPrompt, setHtmlPrompt] = React.useState<string | null>(null)
   const [customImagePrompt, setCustomImagePrompt] = React.useState("")
   const [customHtmlPrompt, setCustomHtmlPrompt] = React.useState("")
+
+  type SavedPrompt = {
+    id: string
+    name: string
+    html_prompt: string | null
+    image_prompt: string | null
+  }
+  const [savedPrompts, setSavedPrompts] = React.useState<SavedPrompt[]>([])
+  const [selectedPromptId, setSelectedPromptId] = React.useState<string>("default")
+  const [promptName, setPromptName] = React.useState<string>("")
+  const [promptSaving, setPromptSaving] = React.useState(false)
+  const [promptStatus, setPromptStatus] = React.useState<string | null>(null)
+
+  const loadSavedPrompts = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/newsletter/prompts", { cache: "no-store" })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data?.ok && Array.isArray(data.items)) {
+        setSavedPrompts(data.items as SavedPrompt[])
+      }
+    } catch {}
+  }, [])
+
+  React.useEffect(() => {
+    loadSavedPrompts()
+  }, [loadSavedPrompts])
+
+  const handlePromptSelect = (value: string) => {
+    setSelectedPromptId(value)
+    setPromptStatus(null)
+    if (value === "default") {
+      setPromptName("")
+      setCustomImagePrompt("")
+      setCustomHtmlPrompt("")
+      return
+    }
+    if (value === "new") {
+      setPromptName("")
+      return
+    }
+    const found = savedPrompts.find((p) => p.id === value)
+    if (found) {
+      setPromptName(found.name)
+      setCustomImagePrompt(found.image_prompt ?? "")
+      setCustomHtmlPrompt(found.html_prompt ?? "")
+    }
+  }
+
+  const handleSavePrompt = async () => {
+    setPromptStatus(null)
+    const name = promptName.trim()
+    if (!name) {
+      setPromptStatus("Enter a preset name first.")
+      return
+    }
+    setPromptSaving(true)
+    try {
+      const isExisting =
+        selectedPromptId !== "default" &&
+        selectedPromptId !== "new" &&
+        savedPrompts.some((p) => p.id === selectedPromptId)
+      const url = isExisting
+        ? `/api/newsletter/prompts/${selectedPromptId}`
+        : "/api/newsletter/prompts"
+      const method = isExisting ? "PATCH" : "POST"
+      const res = await fetch(url, {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          htmlPrompt: customHtmlPrompt.trim() || null,
+          imagePrompt: customImagePrompt.trim() || null,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.ok) {
+        setPromptStatus(data?.error || res.statusText || "Save failed")
+        return
+      }
+      await loadSavedPrompts()
+      if (data.item?.id) setSelectedPromptId(data.item.id)
+      setPromptStatus(isExisting ? "Preset updated." : "Preset saved.")
+    } catch (e) {
+      setPromptStatus(e instanceof Error ? e.message : "Save failed")
+    } finally {
+      setPromptSaving(false)
+    }
+  }
+
+  const handleDeletePrompt = async () => {
+    const isExisting =
+      selectedPromptId !== "default" &&
+      selectedPromptId !== "new" &&
+      savedPrompts.some((p) => p.id === selectedPromptId)
+    if (!isExisting) return
+    if (!confirm("Delete this saved preset? This cannot be undone.")) return
+    setPromptSaving(true)
+    setPromptStatus(null)
+    try {
+      const res = await fetch(`/api/newsletter/prompts/${selectedPromptId}`, {
+        method: "DELETE",
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || !data?.ok) {
+        setPromptStatus(data?.error || res.statusText || "Delete failed")
+        return
+      }
+      await loadSavedPrompts()
+      setSelectedPromptId("default")
+      setPromptName("")
+      setCustomImagePrompt("")
+      setCustomHtmlPrompt("")
+      setPromptStatus("Preset deleted.")
+    } catch (e) {
+      setPromptStatus(e instanceof Error ? e.message : "Delete failed")
+    } finally {
+      setPromptSaving(false)
+    }
+  }
   const [imageModel, setImageModel] = React.useState<
     "dall-e-3" | "gpt-image-1" | "gemini-3.1-flash-image-preview" | "gemini-3-pro-image-preview" | "gemini-2.5-flash-image"
   >("dall-e-3")
@@ -538,9 +662,23 @@ export default function NewsletterPage() {
                   ) : (
                     <ul className="rounded-md border bg-muted/30 divide-y divide-border">
                       {filesForDate.map((f) => (
-                        <li key={f.key} className="flex items-center gap-2 px-3 py-2 text-sm">
-                          <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                          <span className="truncate">{f.key}</span>
+                        <li key={f.key} className="flex items-start gap-2 px-3 py-2 text-sm">
+                          <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="truncate font-medium">
+                                {f.displayTitle || f.key}
+                              </span>
+                              {f.titleSource && f.titleSource !== "filename" && (
+                                <span className="text-[10px] uppercase tracking-wide rounded border bg-background px-1 py-0.5 text-muted-foreground">
+                                  {f.titleSource}
+                                </span>
+                              )}
+                            </div>
+                            <span className="block text-xs text-muted-foreground truncate">
+                              {f.key}
+                            </span>
+                          </div>
                           {f.used && (
                             <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-600">
                               <CheckCircle2Icon className="h-3.5 w-3.5" />
@@ -706,6 +844,72 @@ export default function NewsletterPage() {
               </div>
             )}
 
+            <div className="space-y-3 rounded-md border bg-muted/20 p-3">
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="space-y-1 flex-1 min-w-[220px]">
+                  <Label htmlFor="prompt-preset">Prompt preset</Label>
+                  <Select value={selectedPromptId} onValueChange={handlePromptSelect}>
+                    <SelectTrigger id="prompt-preset">
+                      <SelectValue placeholder="Default" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="default">Default prompt</SelectItem>
+                      <SelectItem value="new">+ Create new preset</SelectItem>
+                      {savedPrompts.map((p) => (
+                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1 flex-1 min-w-[220px]">
+                  <Label htmlFor="prompt-name">Preset name</Label>
+                  <input
+                    id="prompt-name"
+                    type="text"
+                    className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                    placeholder="My preset name"
+                    value={promptName}
+                    onChange={(e) => setPromptName(e.target.value)}
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSavePrompt}
+                    disabled={promptSaving || !promptName.trim()}
+                  >
+                    {promptSaving
+                      ? "Saving…"
+                      : selectedPromptId !== "default" &&
+                        selectedPromptId !== "new" &&
+                        savedPrompts.some((p) => p.id === selectedPromptId)
+                      ? "Update preset"
+                      : "Save preset"}
+                  </Button>
+                  {selectedPromptId !== "default" &&
+                    selectedPromptId !== "new" &&
+                    savedPrompts.some((p) => p.id === selectedPromptId) && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleDeletePrompt}
+                        disabled={promptSaving}
+                      >
+                        Delete
+                      </Button>
+                    )}
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Saves both the HTML prompt and the image prompt below as a single preset. Selecting a preset fills both textareas.
+              </p>
+              {promptStatus && (
+                <p className="text-xs text-muted-foreground">{promptStatus}</p>
+              )}
+            </div>
+
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="custom-image-prompt">Custom image prompt (optional)</Label>
@@ -783,20 +987,34 @@ export default function NewsletterPage() {
                         Deselect all
                       </Button>
                     </div>
-                    <ul className="rounded-md border bg-muted/30 divide-y divide-border max-h-[200px] overflow-y-auto">
+                    <ul className="rounded-md border bg-muted/30 divide-y divide-border max-h-[280px] overflow-y-auto">
                     {filesForDate.map((f) => (
-                      <li key={f.key} className="flex items-center gap-2 px-3 py-2 text-sm">
+                      <li key={f.key} className="flex items-start gap-2 px-3 py-2 text-sm">
                         <input
                           type="checkbox"
                           checked={selectedKeys.has(f.key)}
                           onChange={() => toggleFile(f.key)}
-                          className="h-4 w-4 rounded border-input"
-                          aria-label={`Include ${f.key}`}
+                          className="h-4 w-4 rounded border-input mt-0.5"
+                          aria-label={`Include ${f.displayTitle || f.key}`}
                         />
-                        <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        <span className="truncate">{f.key}</span>
+                        <FileTextIcon className="h-4 w-4 shrink-0 text-muted-foreground mt-0.5" />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="truncate font-medium">
+                              {f.displayTitle || f.key}
+                            </span>
+                            {f.titleSource && f.titleSource !== "filename" && (
+                              <span className="text-[10px] uppercase tracking-wide rounded border bg-background px-1 py-0.5 text-muted-foreground">
+                                {f.titleSource}
+                              </span>
+                            )}
+                          </div>
+                          <span className="block text-xs text-muted-foreground truncate">
+                            {f.key}
+                          </span>
+                        </div>
                         {f.used && (
-                          <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-600">
+                          <span className="ml-auto inline-flex items-center gap-1 text-xs text-green-600 shrink-0">
                             <CheckCircle2Icon className="h-3.5 w-3.5" />
                             Used
                           </span>

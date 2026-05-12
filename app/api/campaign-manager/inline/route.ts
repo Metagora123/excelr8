@@ -5,6 +5,7 @@ import {
   buildCampaignName,
   createCampaignRow,
   upsertLeadsAndFillLeadCampaigns,
+  mergeNormalizedWithSupabaseLeadFields,
   createHitlistTableAndAppendLeads,
   createAutoLikeTable,
   appendAutoLikeRecordsFromLeadPosts,
@@ -13,12 +14,12 @@ import {
   updateCampaignLeadCount,
   createCampaignAutomationRow,
   createAutoCommentAutomationRow,
-  triggerOnDemandEnrichment,
 } from "@/lib/campaign-manager-inline"
 import { runEnrichmentForCampaign } from "@/lib/enrichment-engine"
 import {
   getAirtableApiKey,
   getAirtableBaseId,
+  getAirtableBaseIdForAccount,
   getN8nApiUrl,
   getN8nAutoLikeWorkflowId,
   getN8nHitlistWorkflowId,
@@ -26,11 +27,11 @@ import {
 } from "@/lib/env"
 import type { SupabaseProject } from "@/lib/supabase"
 
-// Vercel Hobby: max 60s (some regions 120s). Enrichment (Unipile per lead) is the bottleneck; large CSVs will timeout.
-export const maxDuration = 120
-
-/** Max leads per inline run to avoid hitting runtime timeout (enrichment is ~10–30s per lead). */
-const INLINE_MAX_LEADS = 25
+// Enrichment is the long-tail step (~10–30s per lead on Unipile). We keep all
+// enrichment in-process now (no n8n hand-off), so the runtime budget needs to
+// cover the worst-case CSV. Vercel Pro allows up to 300s; the UI streams
+// per-lead progress so the user sees forward motion well before the deadline.
+export const maxDuration = 300
 
 type Checkpoint =
   | "campaign_created"
@@ -50,6 +51,10 @@ function streamLine(controller: ReadableStreamDefaultController<Uint8Array>, obj
 
 function parseProject(v: string | null): SupabaseProject {
   return v === "prod2k26" ? "prod2k26" : "sales2k25"
+}
+
+function isAirtablePermissionError(detail: string): boolean {
+  return /Airtable create table:\s*403|INVALID_PERMISSIONS/i.test(detail)
 }
 
 export async function POST(req: Request) {
@@ -90,6 +95,13 @@ export async function POST(req: Request) {
     async start(controller) {
       try {
         const campaignId = generateCampaignId()
+        // Per-campaign secret used to authenticate Airtable button clicks. Same
+        // UUID is stamped on every Hitlist row's Button_Token and stored on the
+        // automation row, so the trigger endpoint can verify clicks without
+        // trusting Airtable.
+        const airtableButtonToken = (typeof globalThis.crypto?.randomUUID === "function"
+          ? globalThis.crypto.randomUUID()
+          : Math.random().toString(36).slice(2) + Date.now().toString(36))
         const dateStr = new Date().toISOString().slice(0, 10)
         const campaignDisplayName = buildCampaignName({
           campaignName: campaignName || "Campaign",
@@ -148,33 +160,13 @@ export async function POST(req: Request) {
           })
         }
 
-        // 4) Enrichment: in-app (≤25 leads) or on-demand n8n (>25 leads)
-        const useOnDemandEnrichment = normalized.length > INLINE_MAX_LEADS
+        // 4) Enrichment: always in-app now. The old `>25 leads → n8n` branch
+        //    was removed once `maxDuration` was bumped to 300s; the UI shows a
+        //    live progress bar via the `enrichment_progress` stream so even
+        //    100-lead CSVs feel responsive.
         let enrichmentSummary: { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> } | null = null
-        let onDemandEnrichment: { sent: boolean; errors: string[] } | null = null
 
-        if (useOnDemandEnrichment) {
-          try {
-            const result = await triggerOnDemandEnrichment(
-              campaignId,
-              clientId,
-              normalized,
-              leadIdsByProfileUrl
-            )
-            onDemandEnrichment = { sent: result.sent, errors: result.errors }
-            streamLine(controller, {
-              checkpoint: "leads_enriched" as Checkpoint,
-              on_demand_enrichment: true,
-              onDemandEnrichment: { sent: result.sent, errors: result.errors },
-            })
-          } catch (e) {
-            streamLine(controller, {
-              error: "On-demand enrichment trigger failed",
-              detail: e instanceof Error ? e.message : String(e),
-            })
-            streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint, skipped: true })
-          }
-        } else if (getUnipileApiKey()) {
+        if (getUnipileApiKey()) {
           try {
             enrichmentSummary = await runEnrichmentForCampaign(
               project,
@@ -202,8 +194,35 @@ export async function POST(req: Request) {
           streamLine(controller, { checkpoint: "leads_enriched" as Checkpoint, skipped: true })
         }
 
+        // 4b) Refresh in-memory lead rows from Supabase so Airtable append sees
+        //     Unipile headline (`description`) and any filled about_summary, etc.
+        try {
+          await mergeNormalizedWithSupabaseLeadFields(project, normalized, leadIdsByProfileUrl)
+        } catch (e) {
+          streamLine(controller, {
+            error: "Merge enriched lead fields failed (non-fatal for campaign)",
+            detail: e instanceof Error ? e.message : String(e),
+          })
+        }
+
         const airtableToken = getAirtableApiKey()
-        const airtableBaseId = getAirtableBaseId()
+        const fallbackAirtableBaseId = getAirtableBaseId()
+        const resolvedAirtableBase = getAirtableBaseIdForAccount(managedBy || "")
+        let airtableBaseId = resolvedAirtableBase.baseId
+        if (resolvedAirtableBase.source === "account") {
+          streamLine(controller, {
+            airtableBaseSelection: "account",
+            managedBy: managedBy || undefined,
+            envKey: resolvedAirtableBase.envKey,
+            baseId: airtableBaseId,
+          })
+        } else {
+          streamLine(controller, {
+            airtableBaseSelection: "default_fallback",
+            managedBy: managedBy || undefined,
+            baseId: airtableBaseId || undefined,
+          })
+        }
         let airtableHitlistUrl = ""
         let airtableAutoLikeUrl = ""
         let airtableHitlistTableId = ""
@@ -218,7 +237,16 @@ export async function POST(req: Request) {
         if (enableAutoLike && airtableToken && airtableBaseId) {
           try {
             const autoLikeTableName = `AUTO-LIKE-COMMENT-${tableNameSuffix}`
-            const result = await createAutoLikeTable(airtableBaseId, airtableToken, autoLikeTableName, project)
+            let result = await createAutoLikeTable(airtableBaseId, airtableToken, autoLikeTableName, project)
+            if (
+              !result.tableId &&
+              resolvedAirtableBase.source === "account" &&
+              fallbackAirtableBaseId &&
+              fallbackAirtableBaseId !== airtableBaseId
+            ) {
+              result = await createAutoLikeTable(fallbackAirtableBaseId, airtableToken, autoLikeTableName, project)
+              airtableBaseId = fallbackAirtableBaseId
+            }
             airtableAutoLikeUrl = result.url
             airtableAutoLikeTableId = result.tableId
             streamLine(controller, {
@@ -248,14 +276,54 @@ export async function POST(req: Request) {
             })
           } catch (e) {
             const detail = e instanceof Error ? e.message : String(e)
-            console.error("[inline] Airtable Auto Like table failed:", detail, "(404 = wrong AIRTABLE_BASE_ID or base not found.)")
-            const hint = /404|NOT_FOUND/i.test(detail)
-              ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
-              : ""
-            streamLine(controller, {
-              error: "Airtable Auto Like table failed",
-              detail: detail + hint,
-            })
+            const canFallbackOnPermissionError =
+              resolvedAirtableBase.source === "account" &&
+              fallbackAirtableBaseId &&
+              fallbackAirtableBaseId !== airtableBaseId &&
+              isAirtablePermissionError(detail)
+            if (canFallbackOnPermissionError) {
+              try {
+                const autoLikeTableName = `AUTO-LIKE-COMMENT-${tableNameSuffix}`
+                const result = await createAutoLikeTable(
+                  fallbackAirtableBaseId,
+                  airtableToken,
+                  autoLikeTableName,
+                  project
+                )
+                airtableBaseId = fallbackAirtableBaseId
+                airtableAutoLikeUrl = result.url
+                airtableAutoLikeTableId = result.tableId
+                streamLine(controller, {
+                  checkpoint: "airtable_auto_like_table_created" as Checkpoint,
+                  tableName: autoLikeTableName,
+                  url: result.url,
+                  tableId: result.tableId,
+                  schemaSource: result.schemaSource,
+                  schemaError: result.schemaError,
+                  fields: result.fields,
+                  airtableBaseFallbackUsed: true,
+                })
+              } catch (fallbackErr) {
+                const fallbackDetail =
+                  fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+                const hint = /404/.test(fallbackDetail)
+                  ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+                  : ""
+                streamLine(controller, {
+                  error: "Airtable Auto Like table failed",
+                  detail: fallbackDetail + hint,
+                })
+              }
+            } else {
+              console.error("[inline] Airtable Auto Like table failed:", detail, "(404 = wrong AIRTABLE_BASE_ID or base not found.)")
+              const hint = /404/.test(detail)
+                ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+                : ""
+              streamLine(controller, {
+                error: "Airtable Auto Like table failed",
+                detail: detail + hint,
+              })
+            }
           }
         } else {
           streamLine(controller, { checkpoint: "airtable_auto_like_table_created" as Checkpoint, skipped: true })
@@ -271,7 +339,8 @@ export async function POST(req: Request) {
               hitlistTableName,
               normalized,
               project,
-              campaignId
+              campaignId,
+              airtableButtonToken
             )
             airtableHitlistUrl = result.url
             airtableHitlistTableId = result.tableId
@@ -286,14 +355,57 @@ export async function POST(req: Request) {
             })
           } catch (e) {
             const detail = e instanceof Error ? e.message : String(e)
-            console.error("[inline] Airtable Hitlist table failed:", detail, "(404 usually means wrong AIRTABLE_BASE_ID or base not found.)")
-            const hint = /404|NOT_FOUND/i.test(detail)
-              ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
-              : ""
-            streamLine(controller, {
-              error: "Airtable Hitlist table failed",
-              detail: detail + hint,
-            })
+            const canFallbackOnPermissionError =
+              resolvedAirtableBase.source === "account" &&
+              fallbackAirtableBaseId &&
+              fallbackAirtableBaseId !== airtableBaseId &&
+              isAirtablePermissionError(detail)
+            if (canFallbackOnPermissionError) {
+              try {
+                const hitlistTableName = `HITLIST-${tableNameSuffix}`
+                const result = await createHitlistTableAndAppendLeads(
+                  fallbackAirtableBaseId,
+                  airtableToken,
+                  hitlistTableName,
+                  normalized,
+                  project,
+                  campaignId,
+                  airtableButtonToken
+                )
+                airtableBaseId = fallbackAirtableBaseId
+                airtableHitlistUrl = result.url
+                airtableHitlistTableId = result.tableId
+                streamLine(controller, {
+                  checkpoint: "airtable_hitlist_table_created" as Checkpoint,
+                  tableName: hitlistTableName,
+                  url: result.url,
+                  tableId: result.tableId,
+                  schemaSource: result.schemaSource,
+                  schemaError: result.schemaError,
+                  fields: result.fields,
+                  airtableBaseFallbackUsed: true,
+                })
+              } catch (fallbackErr) {
+                const fallbackDetail =
+                  fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr)
+                const hint = /404/.test(fallbackDetail)
+                  ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+                  : ""
+                streamLine(controller, {
+                  error: "Airtable Hitlist table failed",
+                  detail: fallbackDetail + hint,
+                })
+              }
+            } else {
+              console.error("[inline] Airtable Hitlist table failed:", detail, "(404 usually means wrong AIRTABLE_BASE_ID or base not found.)")
+              const hint = /404/.test(detail)
+                ? " Fix: check AIRTABLE_BASE_ID in env (base may not exist or you may not have access)."
+                : ""
+              streamLine(controller, {
+                error: "Airtable Hitlist table failed",
+                detail: detail + hint,
+              })
+            }
           }
         } else {
           streamLine(controller, { checkpoint: "airtable_hitlist_table_created" as Checkpoint, skipped: true })
@@ -362,7 +474,13 @@ export async function POST(req: Request) {
         // 10) In-app campaign automation row (when checkbox enabled and hitlist table exists)
         if (enableCampaignAutomation && airtableHitlistTableId && airtableBaseId) {
           try {
-            await createCampaignAutomationRow(project, campaignId, airtableBaseId, airtableHitlistTableId)
+            await createCampaignAutomationRow(
+              project,
+              campaignId,
+              airtableBaseId,
+              airtableHitlistTableId,
+              airtableButtonToken
+            )
             streamLine(controller, { campaign_automation_created: true })
           } catch (e) {
             const detail = e instanceof Error ? e.message : String(e)
@@ -397,7 +515,6 @@ export async function POST(req: Request) {
           airtableUrlsSaved: airtableUrlsSaved || undefined,
           leadsCount: normalized.length,
           enrichmentSummary: enrichmentSummary ?? undefined,
-          onDemandEnrichment: onDemandEnrichment ?? undefined,
           // Rollback: IDs for deleting tables and workflows from this run
           rollback: {
             airtableBaseId: airtableBaseId || undefined,

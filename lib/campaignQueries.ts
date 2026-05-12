@@ -20,10 +20,6 @@ export type KpiTotals = {
   invites_sent: number
   comments_made: number
   likes_reactions: number
-  /** From in_app_campaign_automations */
-  automation_invites_sent: number
-  automation_to_be_messaged: number
-  automation_rejected: number
 }
 
 export type LeadCampaignRow = {
@@ -89,9 +85,6 @@ export async function getKpiTotals(project: SupabaseProject = "sales2k25"): Prom
     invites_sent: 0,
     comments_made: 0,
     likes_reactions: 0,
-    automation_invites_sent: 0,
-    automation_to_be_messaged: 0,
-    automation_rejected: 0,
   }
   for (const c of campaigns) {
     totals.messages_sent += c.messages_sent ?? 0

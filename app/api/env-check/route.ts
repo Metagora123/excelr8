@@ -22,6 +22,9 @@ const ENV_SPEC: Array<{ key: string; label: string; group: string }> = [
   { key: "SUPABASE_SERVICE_ROLE_KEY_PROD2K26", label: "Supabase service role key (prod2k26)", group: "Supabase" },
   { key: "AIRTABLE_API_KEY", label: "Airtable API key / PAT", group: "Airtable" },
   { key: "AIRTABLE_BASE_ID", label: "Airtable base ID", group: "Airtable" },
+  { key: "AIRTABLE_BASE_URL_YVES", label: "Airtable base URL (Yves)", group: "Airtable" },
+  { key: "AIRTABLE_BASE_URL_ANNA", label: "Airtable base URL (Anna)", group: "Airtable" },
+  { key: "AIRTABLE_BASE_URL_HIBAT", label: "Airtable base URL (Hibat)", group: "Airtable" },
   { key: "AIRTABLE_TEMPLATE_AUTO_LIKE_TABLE_ID", label: "Airtable template Auto Like table ID", group: "Airtable" },
   { key: "AIRTABLE_TEMPLATE_HITLIST_TABLE_ID", label: "Airtable template Hitlist table ID", group: "Airtable" },
   { key: "AIRTABLE_TABLE_NAME", label: "Airtable table name (Leads)", group: "Airtable" },
@@ -50,6 +53,7 @@ const ENV_SPEC: Array<{ key: string; label: string; group: string }> = [
   { key: "ADMIN_USERNAME", label: "Admin username", group: "Auth" },
   { key: "ADMIN_PASSWORD_HASH", label: "Admin password hash", group: "Auth" },
   { key: "CRON_SECRET", label: "Cron secret (Vercel)", group: "Cron" },
+  { key: "NEXT_PUBLIC_DASHBOARD_URL", label: "Public dashboard base URL (Airtable in-app button origin)", group: "Dashboard" },
 ]
 
 function getEnv(key: string): string {
@@ -80,6 +84,11 @@ function buildVars(): Array<{ key: string; label: string; group: string; set: bo
 
 type PingResult = { name: string; ok: boolean; detail: string }
 
+function parseAirtableBaseIdFromUrl(url: string): string {
+  const m = String(url ?? "").trim().match(/airtable\.com\/(app[a-zA-Z0-9]+)/i)
+  return m?.[1] ?? ""
+}
+
 async function runPings(): Promise<PingResult[]> {
   const results: PingResult[] = []
   const supabaseUrl = getSupabaseUrl()
@@ -93,6 +102,11 @@ async function runPings(): Promise<PingResult[]> {
   const hubspotToken = getHubSpotAccessToken()
   const hubspotBase = getHubSpotApiBase()
   const sendgridKey = getSendGridApiKey()
+  const accountBaseUrls = [
+    { account: "Yves", key: "AIRTABLE_BASE_URL_YVES" },
+    { account: "Anna", key: "AIRTABLE_BASE_URL_ANNA" },
+    { account: "Hibat", key: "AIRTABLE_BASE_URL_HIBAT" },
+  ] as const
 
   // Supabase
   if (supabaseUrl && supabaseKey) {
@@ -133,6 +147,34 @@ async function runPings(): Promise<PingResult[]> {
     }
   } else {
     results.push({ name: "Airtable", ok: false, detail: "Missing base ID or API key" })
+  }
+
+  // Airtable account-specific base URL checks (optional, but required for account-routed campaign tables)
+  for (const entry of accountBaseUrls) {
+    const url = getEnv(entry.key)
+    if (!url) {
+      results.push({ name: `Airtable ${entry.account} base URL`, ok: false, detail: `Missing ${entry.key}` })
+      continue
+    }
+    const parsed = parseAirtableBaseIdFromUrl(url)
+    if (!parsed) {
+      results.push({ name: `Airtable ${entry.account} base URL`, ok: false, detail: `${entry.key} does not contain a valid app... base ID` })
+      continue
+    }
+    if (!airtableKey) {
+      results.push({ name: `Airtable ${entry.account} base URL`, ok: true, detail: `Parsed base ${parsed} (Airtable API key missing, skipped API check)` })
+      continue
+    }
+    try {
+      const schemaRes = await fetch(`https://api.airtable.com/v0/meta/bases/${parsed}`, { headers: { Authorization: `Bearer ${airtableKey}` } })
+      results.push({
+        name: `Airtable ${entry.account} base URL`,
+        ok: schemaRes.ok || schemaRes.status === 403,
+        detail: schemaRes.ok ? `OK (${parsed})` : `HTTP ${schemaRes.status} (${parsed})`,
+      })
+    } catch (e) {
+      results.push({ name: `Airtable ${entry.account} base URL`, ok: false, detail: e instanceof Error ? e.message : String(e) })
+    }
   }
 
   // n8n workflows

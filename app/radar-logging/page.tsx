@@ -545,6 +545,14 @@ export default function PostRadarLoggingPage() {
   return (
     <AppShell title="Post Radar Logging">
       <div className="px-4 lg:px-6 space-y-6">
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-300">
+          <p className="font-medium">Post Radar Logging is currently disabled.</p>
+          <p className="text-xs mt-1 opacity-90">
+            This page is read-only and view-only — interactions are turned off until further notice. Use the regular
+            Post Radar page in the meantime.
+          </p>
+        </div>
+        <div className="opacity-50 grayscale pointer-events-none select-none" aria-disabled="true">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-semibold">Post Radar Logging</h2>
@@ -843,6 +851,7 @@ export default function PostRadarLoggingPage() {
             </CardContent>
           </Card>
         )}
+        </div>
       </div>
 
       {/* ICP Settings Sheet */}

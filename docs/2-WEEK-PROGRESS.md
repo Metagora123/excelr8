@@ -116,4 +116,133 @@ Dashboard and other pages use **fallback mock data** when the API or Supabase is
 
 ---
 
-*Document generated for client presentation. For full technical detail, see `Project Spec.md` and `docs/SCHEMA-REFERENCE.md`.*
+## 9. Continuation — Feb 24 to Mar 3, 2026
+
+This section captures work shipped on top of the v1 above. The build (`npm run build`) is green, all 50 routes compile and TypeScript passes with no errors.
+
+### 9.1 In-app automation: source-of-truth shift away from n8n
+
+We are moving off n8n for invite execution. `in_app_campaign_automations` is now the single source of truth for invite outcomes:
+
+- The KPI dashboard reads invites only from `in_app_campaign_automations.total_invites_sent` (the legacy `campaigns.invites_sent` column is still mirrored for back-compat with n8n nodes / external dashboards but is no longer summed into the KPI tile, eliminating a double-count bug).
+- Per-campaign metrics on the KPI page now come from `run_logs` aggregation, not stale counter columns.
+
+### 9.2 Transient errors are no longer counted as "Invite failed"
+
+Previously, every Unipile error rolled into a single `total_to_be_messaged` counter labelled "Invite failed". That bundled four very different categories together and counted things that should have been retried.
+
+A new `isTransient(statusCode)` helper in `lib/campaignAutomationQueries.ts` classifies an error as retryable when:
+
+- HTTP `408`, `425`, `429`
+- HTTP `5xx`
+- Network exception (no status code)
+
+When transient:
+
+- `step` is logged as `retry_pending` (new) with `transient: true`
+- The Airtable row's `status` is left as `fresh` so the next run picks it up automatically
+- The lead is **not** counted as a failure in any tile
+
+When non-transient (4xx other than 429, missing `provider_id`, real Unipile rejection): existing behaviour — Airtable status flips to `to_be_messaged` and the row enters the failure buckets below.
+
+### 9.3 KPI dashboard rebuilt around honest buckets
+
+The 6-tile dashboard was replaced with a 4×2 grid pulled from `run_logs[].leads[].step`:
+
+| Tile | Source | What it really means |
+|---|---|---|
+| **Campaigns** | `campaigns` row count | — |
+| **Messages Sent** | `campaigns.messages_sent` | — |
+| **Invites Sent** | `in_app_campaign_automations.total_invites_sent` | Genuinely delivered invites |
+| **Engagement** | `campaigns.comments_made + likes_reactions` | — |
+| **Send failed** | `step = invite_failed` | LinkedIn refused (already invited / connected / quota / sender flagged) |
+| **Profile unreachable** | `step ∈ {profile_not_found, unipile_profile_error}` | Private / restricted / 404 |
+| **Skipped — bad input** | `step = skip` | No / invalid LinkedIn URL (replaces old "Rejected" tile) |
+| **Retry pending** | `step = retry_pending` or `transient = true` | 429 / 5xx / network — will retry next run |
+
+The per-campaign details panel mirrors the same 8 metrics.
+
+### 9.4 New endpoint: per-campaign run logs
+
+`GET /api/kpi/campaign/[id]?project=…` aggregates every `run_logs[].leads[]` entry for a campaign, plus the campaign row and bucket totals. Returns:
+
+```jsonc
+{
+  "campaign":    { "id", "name", "status", "messages_sent", … },
+  "automations": [{ "id", "total_invites_sent", "runs": [ … ] }],
+  "buckets":     { "invites_sent", "send_failed", "profile_unreachable", "skipped_bad_input", "retry_pending" },
+  "leads":       [/* flattened across all runs, sorted newest-first */]
+}
+```
+
+### 9.5 KPI dashboard: "View run logs" drawer
+
+A new right-side drawer on the per-campaign panel (`app/kpi/page.tsx`):
+
+- 5 mini-tiles at top: invites_sent / send_failed / profile_unreachable / bad input / retry pending.
+- Automation status strip: last run timestamp + status + total runs + cumulative DB columns.
+- Search: matches LinkedIn URL, error string, Unipile response snippets, decision, Airtable record ID.
+- Filter pills with live counts (All, Invited, Send failed, Profile unreachable, Skipped, Retry pending).
+- Per-lead cards with colour-coded step badge, clickable LinkedIn URL, Airtable record ID, profile/invite HTTP status, decision, error block, collapsible profile/invite response snippets, and collapsible generated outreach messages (Message_1/2/3).
+
+This replaces the previous "go run SQL on `run_logs`" workflow with a one-click drill-down.
+
+### 9.6 Airtable & campaign UX improvements
+
+- **Hitlist URL formula** updated to use `webhook` instead of `webhook-test` for production routing.
+- **Auto Like URL formula** now includes `campaign_id` as a query parameter so the n8n flow can scope its actions per campaign.
+- **Empty-row cleanup**: the default empty row Airtable creates with new tables is now auto-deleted when `appendAutoLikeRecordsFromLeadPosts` writes 0 actual records.
+- **Auto Comment generation** now skips a row only when **all four** of `comment_a/b/c/d` are populated (previously it skipped on `comment_a` alone, which produced incomplete sets).
+- **Per-account Airtable bases**: campaigns can be created in a base specific to the responsible Unipile account (`AIRTABLE_BASE_URL_YVES`, `AIRTABLE_BASE_URL_ANNA`, `AIRTABLE_BASE_URL_HIBAT`) with automatic 403-fallback to the default `AIRTABLE_BASE_ID`. Helpers added in `lib/env.ts`: `normalizeAccountKey`, `parseAirtableBaseIdFromUrl`, `getAirtableBaseUrlByAccount`, `getAirtableBaseIdForAccount`. Env-check page now pings each configured base and reports `schema.bases:read` permission status per account.
+
+### 9.7 Newsletter
+
+- **File title extraction**: the file picker on the Newsletter page now displays a human-readable title for each R2 object instead of the raw key. Extraction order: HTML `<title>` → HTML `<h1>` → Markdown `# heading` → cleaned filename slug. (`<img alt>` was previously in the chain and has been removed at the user's request.) Helper `getR2ObjectHead(key, maxBytes=16384)` added to `lib/r2.ts` so we only download the first 16KB per file.
+- **Prompt presets**: `newsletter_prompts` Supabase table is now powered by a CRUD layer:
+  - `lib/newsletterPromptQueries.ts` — `list / create / update / remove`.
+  - `app/api/newsletter/prompts/route.ts` — `GET` + `POST`.
+  - `app/api/newsletter/prompts/[id]/route.ts` — `PATCH` + `DELETE`.
+  - UI: a "Prompt preset" section above the Custom image / Custom HTML textareas. Selecting a preset fills both textareas; saving writes both `html_prompt` and `image_prompt` to a single row; existing presets can be updated or deleted.
+
+### 9.8 UI gating (deprecated paths)
+
+- **n8n workflow checkboxes** on Campaign Manager (Auto Like / Auto Comment n8n workflow, Hitlist n8n workflow) are now greyed-out, disabled, and forced to `false`. Caption: "n8n workflow duplication is currently disabled."
+- **Post Radar Logging** page (`/radar-logging`) and its sidebar entry are greyed out. Sidebar logic now respects a `disabled` flag on nav items (`components/nav-main.tsx`); the page itself shows an amber banner and renders all content with `opacity-50 grayscale pointer-events-none`. Modals remain inert because all triggers are disabled.
+
+### 9.9 HubSpot integration
+
+- HubSpot export documented end-to-end (`docs/HUBSPOT-SYNC-DEV.md`, `docs/HUBSPOT-SYNC-BUSINESS.md`, `client-docs/hubspot.md`).
+- Sync route (`app/api/hubspot/sync/route.ts`): contacts and deals are upserted by stable identifier (email + LinkedIn URL for contacts, campaign id for deals), so re-running the sync updates existing records rather than creating duplicates.
+- Delete route (`app/api/hubspot/delete/route.ts`): one-shot removal of contacts / deals by id list.
+
+### 9.10 Build & deployment readiness (Mar 3, 2026)
+
+```
+> next build
+✓ Compiled successfully in 5.5s
+  Running TypeScript ...  (no errors)
+✓ Generating static pages using 23 workers (47/47)
+```
+
+50 routes compile, lint-clean, no TypeScript errors. Ready for Vercel deploy.
+
+### 9.11 Open / pending items (intentionally deferred)
+
+- **HTTP 429 retry policy refinement.** Current retry logic leaves the row at `fresh` for transient errors; it does not exponential-back-off. Acceptable for daily cron at low volume.
+
+---
+
+### 10. Mar 11, 2026 — Full in-app lifecycle shipped
+
+The following landed after Section 9 was written; it supersedes the old **9.11** bullet about &quot;no acceptance detection&quot;.
+
+- **Three-pass hitlist automation** (`lib/campaignAutomationQueries.ts`): invite → acceptance (always on) → messaging (when `messaging_runner === 'in_app'` or forced for "Run messaging now" / Airtable in-app button). Permanent invite failures write **`invite_failed`** to Airtable and mirror `lead_campaigns.message_status`. Daily DM cap per automation (default 30) with `messages_sent_today` reset by date.
+- **Campaign Automations UI** (`app/campaign-automations/page.tsx`): messaging off/on toggle, quota field, streamed progress for **Run messaging now** (`POST .../campaign-automations/[id]?action=run-messaging`).
+- **Airtable in-app button** (`app/api/airtable/trigger/route.ts`): validates `airtable_button_token` vs row `Button_Token`; `createHitlistTableAndAppendLeads` + inline campaign creation stamp the token (`app/api/campaign-manager/inline/route.ts`).
+- **Lead Campaign Status** (`/campaign-status`, `app/api/campaign-status/route.ts`): by-lead search and by-campaign table with lifecycle pill train.
+- **KPI** (`app/api/kpi/route.ts`, `app/kpi/page.tsx`): current-state counts for **To be messaged** / **Messaged** from `lead_campaigns`; **Invite failed** label; run-log filters for accepted / message sent / messaging failed.
+- **Campaign Manager**: in-app enrichment for all CSV sizes (300s route), live `enrichment_progress`, preview duplicate detection by `profile_url`, CSV >100 row warning after preview.
+
+---
+
+*Document generated for client presentation. For full technical detail, see `Project Spec.md`, `docs/SCHEMA-REFERENCE.md`, and the per-feature pages under `client-docs/`.*
