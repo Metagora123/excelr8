@@ -334,6 +334,14 @@ function mapPostToLeadPost(
   }
 }
 
+/** True when a lead column already has a usable value (Clay/CSV should not be overwritten). */
+function isPopulated(v: unknown): boolean {
+  if (v == null) return false
+  if (typeof v === "string") return v.trim() !== ""
+  if (typeof v === "number") return !Number.isNaN(v)
+  return true
+}
+
 /** Update lead.identifier (and optional fields) in Supabase. */
 async function updateLeadIdentifier(
   supabase: ReturnType<typeof createClient>,
@@ -345,23 +353,51 @@ async function updateLeadIdentifier(
     identifier,
     updated_at: new Date().toISOString(),
   }
-  if (profile) {
-    if (profile.headline != null) row.description = profile.headline
-    const summaryText =
-      typeof profile.summary === "string" && profile.summary.trim()
-        ? profile.summary.trim()
-        : typeof (profile as Record<string, unknown>)["about"] === "string"
-          ? String((profile as Record<string, unknown>)["about"]).trim()
-          : null
-    if (summaryText) row.about_summary = summaryText
-    if (profile.work_experience?.[0]?.company != null) row.company_name = profile.work_experience[0].company
-    if (profile.follower_count != null) row.followers_count = profile.follower_count
-    if (profile.connections_count != null) row.connections_count = profile.connections_count
-    if (profile.contact_info?.emails?.[0] != null) row.email = profile.contact_info.emails[0]
-    if (profile.contact_info?.phones?.[0] != null) row.phone = profile.contact_info.phones[0]
-    if (profile.profile_picture_url != null) row.profile_picture_url = profile.profile_picture_url
-    row.status = "enriched"
+  if (!profile) {
+    await supabase.from("leads").update(row).eq("id", leadId)
+    return
   }
+
+  const { data: existing } = await supabase
+    .from("leads")
+    .select(
+      "email, phone, description, about_summary, company_name, followers_count, connections_count, profile_picture_url"
+    )
+    .eq("id", leadId)
+    .maybeSingle()
+  const cur = (existing ?? {}) as Record<string, unknown>
+
+  // Fill-only: preserve Clay/CSV values already on the row; Unipile fills gaps.
+  if (profile.headline != null && !isPopulated(cur.description)) {
+    row.description = profile.headline
+  }
+  const summaryText =
+    typeof profile.summary === "string" && profile.summary.trim()
+      ? profile.summary.trim()
+      : typeof (profile as Record<string, unknown>)["about"] === "string"
+        ? String((profile as Record<string, unknown>)["about"]).trim()
+        : null
+  if (summaryText && !isPopulated(cur.about_summary)) row.about_summary = summaryText
+  if (profile.work_experience?.[0]?.company != null && !isPopulated(cur.company_name)) {
+    row.company_name = profile.work_experience[0].company
+  }
+  if (profile.follower_count != null && !isPopulated(cur.followers_count)) {
+    row.followers_count = profile.follower_count
+  }
+  if (profile.connections_count != null && !isPopulated(cur.connections_count)) {
+    row.connections_count = profile.connections_count
+  }
+  if (profile.contact_info?.emails?.[0] != null && !isPopulated(cur.email)) {
+    row.email = profile.contact_info.emails[0]
+  }
+  if (profile.contact_info?.phones?.[0] != null && !isPopulated(cur.phone)) {
+    row.phone = profile.contact_info.phones[0]
+  }
+  if (profile.profile_picture_url != null && !isPopulated(cur.profile_picture_url)) {
+    row.profile_picture_url = profile.profile_picture_url
+  }
+  row.status = "enriched"
+
   await supabase.from("leads").update(row).eq("id", leadId)
 }
 

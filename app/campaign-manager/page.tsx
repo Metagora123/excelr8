@@ -20,6 +20,44 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { TargetIcon, UploadIcon, CheckCircle2Icon, CircleIcon, Trash2Icon } from "lucide-react"
+import { buildUploadCsvFile, sliceRows } from "@/lib/csv-truncate"
+
+/** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
+type PreviewCompanyInfo = {
+  industry?: string | null
+  segment?: string | null
+  type?: string | null
+  employee_range?: string | null
+  employee_count?: number | null
+  year_founded?: number | null
+  specialties?: string | string[] | null
+  sales_navigator_url?: string | null
+  recommended_action?: string | null
+  recommended_next_enrichment?: string | null
+} | null
+
+type PreviewIcpScores = {
+  priority_score?: number | null
+  confidence_score?: number | null
+  icp_risk_score?: number | null
+  technographic_fit_score?: number | null
+  firmographic_fit_score?: number | null
+} | null
+
+/** Compact "P 82 · C 90" string for the preview Scores column. Empty -> "—". */
+function formatIcpScores(icp: PreviewIcpScores): string {
+  if (!icp) return "—"
+  const parts: string[] = []
+  if (icp.priority_score != null) parts.push(`P ${icp.priority_score}`)
+  if (icp.confidence_score != null) parts.push(`C ${icp.confidence_score}`)
+  return parts.length > 0 ? parts.join(" · ") : "—"
+}
+
+/** Primary line for the preview Company column: industry, else company type/segment. */
+function companyPrimaryLine(info: PreviewCompanyInfo): string {
+  if (!info) return "—"
+  return info.industry || info.type || info.segment || "—"
+}
 
 function getWebhookSuffix(project: "sales2k25" | "prod2k26"): string {
   return project === "prod2k26" ? "-prod2k26" : ""
@@ -176,19 +214,32 @@ export default function CampaignManagerPage() {
     schemaError?: string
     fields: Array<{ name: string; type: string }>
   } | null>(null)
-  const [previewLeads, setPreviewLeads] = React.useState<Array<{
+  const [allPreviewLeads, setAllPreviewLeads] = React.useState<Array<{
     full_name: string | null
     email: string | null
     profile_url: string | null
+    company_info: PreviewCompanyInfo
+    icp_scores: PreviewIcpScores
+    company_description: string | null
     existingCampaigns: Array<{ id: string; name: string | null }>
   }>>([])
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
+  const [previewLimit, setPreviewLimit] = React.useState<string>("50")
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const [duplicateLookupError, setDuplicateLookupError] = React.useState<string | null>(null)
   /** Total rows in CSV from last preview (`/api/campaign-manager/preview` `total`). Used for the >100 lead timeout warning. */
   const [previewCsvTotal, setPreviewCsvTotal] = React.useState<number | null>(null)
   const inlineInputRef = React.useRef<HTMLInputElement>(null)
+
+  const previewLeads = React.useMemo(
+    () => sliceRows(allPreviewLeads, previewLimit),
+    [allPreviewLeads, previewLimit]
+  )
+
+  React.useEffect(() => {
+    setExcludePreviewIndices([])
+  }, [previewLimit])
 
   const loadClients = React.useCallback(async () => {
     try {
@@ -218,7 +269,7 @@ export default function CampaignManagerPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
     setFile(f ?? null)
-    setPreviewLeads([])
+    setAllPreviewLeads([])
     setExcludePreviewIndices([])
     setPreviewError(null)
     setPreviewCsvTotal(null)
@@ -228,7 +279,7 @@ export default function CampaignManagerPage() {
     if (!file) return
     setPreviewLoading(true)
     setPreviewError(null)
-    setPreviewLeads([])
+    setAllPreviewLeads([])
     setExcludePreviewIndices([])
     setDuplicateLookupError(null)
     setPreviewCsvTotal(null)
@@ -242,6 +293,9 @@ export default function CampaignManagerPage() {
           full_name?: string | null
           email?: string | null
           profile_url?: string | null
+          company_info?: PreviewCompanyInfo
+          icp_scores?: PreviewIcpScores
+          company_description?: string | null
           existingCampaigns?: Array<{ id: string; name: string | null }>
         }>
         total?: number
@@ -254,11 +308,14 @@ export default function CampaignManagerPage() {
       }
       const leads = data.leads ?? []
       setPreviewCsvTotal(typeof data.total === "number" ? data.total : leads.length)
-      setPreviewLeads(
-        leads.slice(0, 50).map((l) => ({
+      setAllPreviewLeads(
+        leads.map((l) => ({
           full_name: l.full_name ?? null,
           email: l.email ?? null,
           profile_url: l.profile_url ?? null,
+          company_info: l.company_info ?? null,
+          icp_scores: l.icp_scores ?? null,
+          company_description: l.company_description ?? null,
           existingCampaigns: Array.isArray(l.existingCampaigns) ? l.existingCampaigns : [],
         }))
       )
@@ -282,8 +339,9 @@ export default function CampaignManagerPage() {
     setLoading(true)
     setStatus(null)
     try {
+      const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
       const formData = new FormData()
-      formData.append("file", file)
+      formData.append("file", uploadFile)
       formData.append("campaignName", campaignName)
       formData.append("clientId", clientId)
       formData.append("category", category)
@@ -296,7 +354,11 @@ export default function CampaignManagerPage() {
         setStatus({ type: "error", message: data.error || res.statusText || "Send failed" })
         return
       }
-      setStatus({ type: "success", message: "Campaign sent to n8n." })
+      const kept = previewLeads.length - excludePreviewIndices.length
+      const limitNote = previewLimit === "all" && previewCsvTotal != null
+        ? ` (${kept.toLocaleString()} rows)`
+        : ` (${kept} of ${previewLeads.length} rows)`
+      setStatus({ type: "success", message: `Campaign sent to n8n${limitNote}.` })
       setFile(null)
       setCampaignName("")
       setCategory("")
@@ -329,8 +391,9 @@ export default function CampaignManagerPage() {
     setEnrichmentLogs([])
     setEnrichmentProgress(null)
     try {
+      const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
       const formData = new FormData()
-      formData.append("file", file)
+      formData.append("file", uploadFile)
       formData.append("campaignName", campaignName)
       formData.append("clientId", clientId)
       formData.append("category", category)
@@ -341,9 +404,6 @@ export default function CampaignManagerPage() {
       formData.append("enableAutoLikeWorkflow", String(enableAutoLikeWorkflow))
       formData.append("enableHitlistWorkflow", String(enableHitlistWorkflow))
       formData.append("enableCampaignAutomation", String(enableCampaignAutomation))
-      if (excludePreviewIndices.length > 0) {
-        formData.append("excludeRows", JSON.stringify(excludePreviewIndices))
-      }
       const res = await fetch("/api/campaign-manager/inline", { method: "POST", body: formData })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
@@ -737,14 +797,39 @@ export default function CampaignManagerPage() {
               >
                 {previewLoading ? "Loading…" : "Preview cleaned leads"}
               </Button>
-              <span className="text-xs text-muted-foreground">Uses same CSV as above. Shows parser & cleaner result (first 50 rows).</span>
+              <span className="text-xs text-muted-foreground">Uses same CSV as above. Shows parser & cleaner result (row count selectable).</span>
             </div>
             {previewError && <p className="text-sm text-destructive">{previewError}</p>}
-            {previewLeads.length > 0 && (
+            {allPreviewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
-                <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">
+                    Parser & cleaner preview ({previewLeads.length.toLocaleString()}
+                    {previewCsvTotal != null && previewCsvTotal > previewLeads.length
+                      ? ` of ${previewCsvTotal.toLocaleString()}`
+                      : ""}{" "}
+                    rows)
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="cm-preview-limit" className="text-xs text-muted-foreground">Rows to use</Label>
+                    <Select value={previewLimit} onValueChange={setPreviewLimit}>
+                      <SelectTrigger id="cm-preview-limit" className="h-8 w-[110px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10</SelectItem>
+                        <SelectItem value="25">25</SelectItem>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                        <SelectItem value="all">
+                          All ({previewCsvTotal != null ? previewCsvTotal.toLocaleString() : allPreviewLeads.length.toLocaleString()})
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create. Rows highlighted in yellow already belong to another campaign (matched by LinkedIn URL).
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create. Rows highlighted in yellow already belong to another campaign (matched by LinkedIn URL). The “Rows to use” selector caps both this preview and the rows actually sent on Create / Send to n8n.
                 </p>
                 {duplicateLookupError && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">
@@ -769,6 +854,8 @@ export default function CampaignManagerPage() {
                         <th className="text-left p-2 font-medium">Enrich_person</th>
                         <th className="text-left p-2 font-medium">A Email</th>
                         <th className="text-left p-2 font-medium">LinkedIn</th>
+                        <th className="text-left p-2 font-medium">Company</th>
+                        <th className="text-left p-2 font-medium">Scores</th>
                         <th className="text-left p-2 font-medium">In campaigns</th>
                         <th className="w-8 p-2" aria-label="Remove" />
                       </tr>
@@ -789,6 +876,15 @@ export default function CampaignManagerPage() {
                               <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
                               <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
                               <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                              <td className="p-2 max-w-[200px]">
+                                <div className="truncate" title={companyPrimaryLine(row.company_info)}>{companyPrimaryLine(row.company_info)}</div>
+                                {row.company_description && (
+                                  <div className="text-[10px] text-muted-foreground truncate" title={row.company_description}>
+                                    {row.company_description}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="p-2 whitespace-nowrap font-mono text-[11px]" title={formatIcpScores(row.icp_scores)}>{formatIcpScores(row.icp_scores)}</td>
                               <td className="p-2 max-w-[220px]">
                                 {isDuplicate ? (
                                   <div className="flex flex-wrap gap-1">

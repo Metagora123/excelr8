@@ -48,3 +48,18 @@ hubspot.config.yml
 
 # Generated client-docs PDFs (run npm run docs:pdf to regenerate)
 /client-docs/output/
+
+
+n8n-flows
+n8n-workflows
+/n8n-flows
+/n8n-workflows
+/n8n-workflows/*
+/n8n-flows/*
+
+
+scripts
+docs/UK-Contacts-Clay - UK-Contacts-Clay.csv
+docs/clay-fields-hubspot-sync-migration.sql
+docs/clay-fields-n8n-deliverables.md
+.cursor/plans/

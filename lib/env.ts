@@ -146,6 +146,16 @@ export function getHubSpotApiBase(): string {
   return "https://api.hubapi.com"
 }
 
+/**
+ * When true, sync Clay company_info + core ICP scores to HubSpot as custom contact
+ * properties (excelr8_* ). Create those properties in HubSpot before enabling, or the
+ * sync gracefully strips/skips them. Default off.
+ */
+export function getHubSpotSyncCompanyProps(): boolean {
+  const v = (getEnv("HUBSPOT_SYNC_COMPANY_PROPS") ?? "").trim().toLowerCase()
+  return v === "true" || v === "1"
+}
+
 /** Airtable PAT for Campaign Manager (create tables, write records). */
 export function getAirtableApiKey(): string {
   return (getEnv("AIRTABLE_API_KEY") ?? "").trim()

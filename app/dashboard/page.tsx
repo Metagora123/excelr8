@@ -25,6 +25,7 @@ type DashboardData = {
   }
   timeline: { date: string; score: number }[]
   recentLeads: { id: string; name: string; company: string; status: string; tier: string; score: number; dossierUrl: string }[]
+  hubspotSync?: { lastSyncAt: string; status: string; trigger: string; contacts: number } | null
 }
 
 async function fetchDashboard(project: string): Promise<DashboardData> {
@@ -102,6 +103,7 @@ export default function DashboardPage() {
             withDossiers={stats.withDossiers}
             dossierPct={dossierPct}
             averageScore={stats.averageScore}
+            hubspotSync={data?.hubspotSync ?? null}
           />
 
           <div className="grid grid-cols-1 gap-4 px-4 @xl/main:grid-cols-2 lg:px-6">

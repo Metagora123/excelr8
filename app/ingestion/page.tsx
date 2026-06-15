@@ -19,6 +19,34 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { UploadIcon, Trash2Icon } from "lucide-react"
+import { sliceRows, buildUploadCsvFile } from "@/lib/csv-truncate"
+
+/** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
+type PreviewCompanyInfo = {
+  industry?: string | null
+  type?: string | null
+  segment?: string | null
+} | null
+
+type PreviewIcpScores = {
+  priority_score?: number | null
+  confidence_score?: number | null
+} | null
+
+/** Compact "P 82 · C 90" string for the preview Scores column. Empty -> "—". */
+function formatIcpScores(icp: PreviewIcpScores): string {
+  if (!icp) return "—"
+  const parts: string[] = []
+  if (icp.priority_score != null) parts.push(`P ${icp.priority_score}`)
+  if (icp.confidence_score != null) parts.push(`C ${icp.confidence_score}`)
+  return parts.length > 0 ? parts.join(" · ") : "—"
+}
+
+/** Primary line for the preview Company column: industry, else type/segment. */
+function companyPrimaryLine(info: PreviewCompanyInfo): string {
+  if (!info) return "—"
+  return info.industry || info.type || info.segment || "—"
+}
 
 export default function FileIngestionPage() {
   const [file, setFile] = React.useState<File | null>(null)
@@ -27,11 +55,22 @@ export default function FileIngestionPage() {
   const [uploading, setUploading] = React.useState(false)
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
-  const [previewLeads, setPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null }>>([])
+  const [allPreviewLeads, setAllPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null; company_info: PreviewCompanyInfo; icp_scores: PreviewIcpScores; company_description: string | null }>>([])
+  const [previewCsvTotal, setPreviewCsvTotal] = React.useState<number | null>(null)
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
+  const [previewLimit, setPreviewLimit] = React.useState<string>("50")
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
+
+  const previewLeads = React.useMemo(
+    () => sliceRows(allPreviewLeads, previewLimit),
+    [allPreviewLeads, previewLimit]
+  )
+
+  React.useEffect(() => {
+    setExcludePreviewIndices([])
+  }, [previewLimit])
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
@@ -39,7 +78,8 @@ export default function FileIngestionPage() {
     const f = e.dataTransfer.files?.[0]
     if (f?.name.endsWith(".csv")) {
       setFile(f)
-      setPreviewLeads([])
+      setAllPreviewLeads([])
+      setPreviewCsvTotal(null)
       setExcludePreviewIndices([])
       setPreviewError(null)
     } else setStatus({ type: "error", message: "Please upload a CSV file." })
@@ -53,7 +93,8 @@ export default function FileIngestionPage() {
     const f = e.target.files?.[0]
     if (f) setFile(f)
     setStatus(null)
-    setPreviewLeads([])
+    setAllPreviewLeads([])
+    setPreviewCsvTotal(null)
     setExcludePreviewIndices([])
     setPreviewError(null)
   }
@@ -66,14 +107,16 @@ export default function FileIngestionPage() {
     if (!file) return
     setPreviewLoading(true)
     setPreviewError(null)
-    setPreviewLeads([])
+    setAllPreviewLeads([])
+    setPreviewCsvTotal(null)
     setExcludePreviewIndices([])
     try {
       const formData = new FormData()
       formData.append("file", file)
       const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
       const data = (await res.json().catch(() => ({}))) as {
-        leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null }>
+        leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null; company_info?: PreviewCompanyInfo; icp_scores?: PreviewIcpScores; company_description?: string | null }>
+        total?: number
         error?: string
       }
       if (!res.ok) {
@@ -81,7 +124,8 @@ export default function FileIngestionPage() {
         return
       }
       const leads = data.leads ?? []
-      setPreviewLeads(leads.slice(0, 50).map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null })))
+      setPreviewCsvTotal(typeof data.total === "number" ? data.total : leads.length)
+      setAllPreviewLeads(leads.map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null, company_info: l.company_info ?? null, icp_scores: l.icp_scores ?? null, company_description: l.company_description ?? null })))
     } catch (e) {
       setPreviewError(e instanceof Error ? e.message : "Preview failed")
     } finally {
@@ -97,8 +141,9 @@ export default function FileIngestionPage() {
     setUploading(true)
     setStatus(null)
     try {
+      const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
       const formData = new FormData()
-      formData.append("data", file)
+      formData.append("data", uploadFile)
       formData.append("endpoint", endpoint)
       formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/ingestion", { method: "POST", body: formData })
@@ -107,9 +152,14 @@ export default function FileIngestionPage() {
         setStatus({ type: "error", message: data.error || res.statusText || "Upload failed" })
         return
       }
-      setStatus({ type: "success", message: "Upload sent to n8n successfully." })
+      const kept = previewLeads.length - excludePreviewIndices.length
+      const limitNote = previewLimit === "all" && previewCsvTotal != null
+        ? ` (${kept.toLocaleString()} rows)`
+        : ` (${kept} of ${previewLeads.length} rows)`
+      setStatus({ type: "success", message: `Upload sent to n8n successfully${limitNote}.` })
       setFile(null)
-      setPreviewLeads([])
+      setAllPreviewLeads([])
+      setPreviewCsvTotal(null)
       setPreviewError(null)
       if (inputRef.current) inputRef.current.value = ""
     } catch (e) {
@@ -197,15 +247,40 @@ export default function FileIngestionPage() {
                 {previewLoading ? "Loading…" : "Preview cleaned leads"}
               </Button>
               <span className="text-xs text-muted-foreground">
-                Uses same parser as Campaign Manager. Shows first 50 rows.
+                Uses same parser as Campaign Manager. Row count selectable.
               </span>
             </div>
             {previewError && <p className="text-sm text-destructive">{previewError}</p>}
-            {previewLeads.length > 0 && (
+            {allPreviewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
-                <p className="text-sm font-medium">Parser & cleaner preview (first {previewLeads.length} rows)</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <p className="text-sm font-medium">
+                    Parser & cleaner preview ({previewLeads.length.toLocaleString()}
+                    {previewCsvTotal != null && previewCsvTotal > previewLeads.length
+                      ? ` of ${previewCsvTotal.toLocaleString()}`
+                      : ""}{" "}
+                    rows)
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="ing-preview-limit" className="text-xs text-muted-foreground">Rows to use</Label>
+                    <Select value={previewLimit} onValueChange={setPreviewLimit}>
+                      <SelectTrigger id="ing-preview-limit" className="h-8 w-[110px]">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="10">10</SelectItem>
+                        <SelectItem value="25">25</SelectItem>
+                        <SelectItem value="50">50</SelectItem>
+                        <SelectItem value="100">100</SelectItem>
+                        <SelectItem value="all">
+                          All ({previewCsvTotal != null ? previewCsvTotal.toLocaleString() : allPreviewLeads.length.toLocaleString()})
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <p className="text-xs text-muted-foreground">
-                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want to upload.
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want to upload. The “Rows to use” selector caps both this preview and the rows actually uploaded.
                 </p>
                 <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
                   <table className="w-full text-xs border-collapse">
@@ -214,6 +289,8 @@ export default function FileIngestionPage() {
                         <th className="text-left p-2 font-medium">Enrich_person</th>
                         <th className="text-left p-2 font-medium">A Email</th>
                         <th className="text-left p-2 font-medium">LinkedIn</th>
+                        <th className="text-left p-2 font-medium">Company</th>
+                        <th className="text-left p-2 font-medium">Scores</th>
                         <th className="w-8 p-2" aria-label="Remove" />
                       </tr>
                     </thead>
@@ -226,6 +303,15 @@ export default function FileIngestionPage() {
                             <td className="p-2 max-w-[200px] truncate" title={row.full_name ?? ""}>{row.full_name ?? "—"}</td>
                             <td className="p-2 max-w-[180px] truncate" title={row.email ?? ""}>{row.email ?? "—"}</td>
                             <td className="p-2 max-w-[180px] truncate" title={row.profile_url ?? ""}>{row.profile_url ?? "—"}</td>
+                            <td className="p-2 max-w-[200px]">
+                              <div className="truncate" title={companyPrimaryLine(row.company_info)}>{companyPrimaryLine(row.company_info)}</div>
+                              {row.company_description && (
+                                <div className="text-[10px] text-muted-foreground truncate" title={row.company_description}>
+                                  {row.company_description}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-2 whitespace-nowrap font-mono text-[11px]" title={formatIcpScores(row.icp_scores)}>{formatIcpScores(row.icp_scores)}</td>
                             <td className="p-2">
                               <Button
                                 type="button"

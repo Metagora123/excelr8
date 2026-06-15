@@ -5,6 +5,7 @@
 
 import { createClient, type SupabaseProject } from "@/lib/supabase"
 import { getUnipileAccounts } from "@/lib/campaignQueries"
+import type { CompanyInfo, IcpScores } from "@/lib/leadQueries"
 import {
   getAirtableApiKey,
   getAirtableBaseId,
@@ -17,21 +18,46 @@ import {
 } from "@/lib/env"
 
 const FIELD_MAPPINGS: Record<string, string[]> = {
-  full_name: ["name", "Name", "Enrich person", "full_name", "fullname"],
-  email: ["email", "Email", "Email Final", "email_address"],
-  profile_url: ["LinkedIn", "Linkedin_Profile", "Profile_url", "URL", "profile_url", "linkedin_url"],
-  title: ["title", "Title", "Title - Experience", "Headline", "job_title"],
-  company_name: ["Org", "Company", "Company - Experience", "company_name", "organization"],
+  full_name: ["Full Name", "name", "Name", "Enrich person", "full_name", "fullname"],
+  email: ["Work Email (Final)", "Work Email", "email_enrich", "email", "Email", "Email Final", "email_address"],
+  profile_url: ["linkedin_profile_url", "LinkedIn", "Linkedin_Profile", "Profile_url", "URL", "profile_url", "linkedin_url"],
+  title: ["job", "title", "Title", "Title - Experience", "Headline", "job_title"],
+  company_name: ["company_cleaned", "Org", "Company", "Company - Experience", "company_name", "organization"],
   location: ["Location Name", "location", "Location", "city", "region"],
   followers_count: ["Num Followers", "followers_count", "followers", "follower_count"],
   connections_count: ["connections_count", "connections", "Num Connections"],
   phone: ["Mobile Phone (EMEA)", "phone", "Phone", "mobile", "phone_number"],
   tier: ["Tier", "tier", "customer_tier"],
-  score: ["Score", "score", "lead_score"],
+  score: ["Score", "score", "lead_score", "Priority Score", "priority_score"],
   status: ["Lead Scoring", "status", "Status", "lead_status"],
   description: ["Reasoning", "description", "Description", "notes"],
   about_summary: ["about_summary", "about", "summary", "bio"],
-  expertise: ["expertise", "skills", "specialties"],
+  expertise: ["all_skills", "expertise", "skills", "specialties"],
+  company_description: ["company_description", "company_about", "org_description"],
+}
+
+/** Clay company intelligence (UK-Contacts/Companies export) -> leads.company_info jsonb. */
+const COMPANY_INFO_MAPPINGS: Record<string, string[]> = {
+  industry: ["company_industry", "Company Industry"],
+  segment: ["Company Segment", "company_segment"],
+  type: ["company_type", "Company Type"],
+  employee_range: ["company_employee_range", "Company Employee Range"],
+  employee_count: ["company_employee_count", "Company Employee Count"],
+  year_founded: ["company_year_founded", "Company Year Founded"],
+  specialties: ["company_specialties", "Company Specialties"],
+  sales_navigator_url: ["salesnavigator_url", "sales_navigator_url", "Sales Navigator URL"],
+  recommended_action: ["Recommended Action", "recommended_action"],
+  recommended_next_enrichment: ["Recommended Next Enrichment", "recommended_next_enrichment"],
+}
+const COMPANY_INFO_NUMERIC = new Set(["employee_count", "year_founded"])
+
+/** Clay ICP / fit sub-scores -> leads.icp_scores jsonb. All numeric. */
+const ICP_SCORE_MAPPINGS: Record<string, string[]> = {
+  priority_score: ["Priority Score", "priority_score"],
+  confidence_score: ["Confidence Score", "confidence_score"],
+  icp_risk_score: ["Negative Icp Risk Score (Higher is Bad)", "Negative Icp Risk Score", "icp_risk_score"],
+  technographic_fit_score: ["Technographic Fit Score", "technographic_fit_score"],
+  firmographic_fit_score: ["Firmographic Fit Score", "firmographic_fit_score"],
 }
 
 function findValue(input: Record<string, unknown>, keys: string[]): string | number | null {
@@ -55,6 +81,28 @@ function toNum(v: unknown): number | null {
   if (v === null || v === undefined || v === "") return null
   const n = parseInt(String(v), 10)
   return Number.isNaN(n) ? null : n
+}
+
+/** Build a nested object (company_info / icp_scores) from a header-mapping config. */
+function buildNested(
+  row: Record<string, unknown>,
+  mappings: Record<string, string[]>,
+  numericKeys?: Set<string>
+): Record<string, string | number | null> {
+  const obj: Record<string, string | number | null> = {}
+  for (const [key, keys] of Object.entries(mappings)) {
+    const raw = findValue(row, keys)
+    if (numericKeys?.has(key)) {
+      obj[key] = toNum(raw)
+    } else {
+      obj[key] = raw != null ? String(raw).trim() || null : null
+    }
+  }
+  return obj
+}
+
+function hasAnyValue(obj: Record<string, unknown>): boolean {
+  return Object.values(obj).some((v) => v !== null && v !== undefined && v !== "")
 }
 
 /** Supabase leads.status column uses this enum. Invalid CSV values are coerced to "new". */
@@ -110,6 +158,9 @@ export type NormalizedLead = {
   expertise: string | null
   followers_count: number | null
   connections_count: number | null
+  company_description: string | null
+  company_info: CompanyInfo | null
+  icp_scores: IcpScores | null
 }
 
 export function normalizeCsvRow(row: Record<string, unknown>): NormalizedLead {
@@ -120,9 +171,36 @@ export function normalizeCsvRow(row: Record<string, unknown>): NormalizedLead {
   const rawDesc = get("description") != null ? String(get("description")) : null
   const rawAbout = get("about_summary") != null ? String(get("about_summary")) : null
   const rawExpertise = get("expertise") != null ? String(get("expertise")) : null
+  const rawCompanyDesc = get("company_description") != null ? String(get("company_description")) : null
+
+  // full_name fallback: combine firstname_cleaned + lastname_cleaned when "Full Name" is empty.
+  let full_name = cleanLeadText(rawName) ?? (rawName?.trim() || null)
+  if (!full_name) {
+    const first = findValue(row, ["firstname_cleaned", "First Name", "first_name", "firstname"])
+    const last = findValue(row, ["lastname_cleaned", "Last Name", "last_name", "lastname"])
+    const combined = [first, last]
+      .filter((v) => v != null && String(v).trim() !== "")
+      .map((v) => String(v).trim())
+      .join(" ")
+      .trim()
+    full_name = combined || null
+  }
+
+  // profile_url: use the URL column, else construct from linkedin_public_id.
+  let profile_url = get("profile_url") != null ? String(get("profile_url")).trim() : null
+  if (!profile_url) {
+    const publicId = findValue(row, ["linkedin_public_id", "public_identifier", "publicId"])
+    if (publicId != null && String(publicId).trim() !== "") {
+      profile_url = `https://www.linkedin.com/in/${String(publicId).trim()}`
+    }
+  }
+
+  const companyInfoObj = buildNested(row, COMPANY_INFO_MAPPINGS, COMPANY_INFO_NUMERIC)
+  const icpScoresObj = buildNested(row, ICP_SCORE_MAPPINGS, new Set(Object.keys(ICP_SCORE_MAPPINGS)))
+
   return {
-    full_name: cleanLeadText(rawName) ?? (rawName?.trim() || null),
-    profile_url: get("profile_url") != null ? String(get("profile_url")).trim() : null,
+    full_name,
+    profile_url,
     email: get("email") != null ? String(get("email")).trim() : null,
     title: cleanLeadText(rawTitle) ?? (rawTitle?.trim() || null),
     company_name: cleanLeadText(rawCompany) ?? (rawCompany?.trim() || null),
@@ -136,6 +214,9 @@ export function normalizeCsvRow(row: Record<string, unknown>): NormalizedLead {
     expertise: cleanLeadText(rawExpertise) ?? (rawExpertise?.trim() || null),
     followers_count: toNum(get("followers_count")),
     connections_count: toNum(get("connections_count")),
+    company_description: cleanLeadText(rawCompanyDesc) ?? (rawCompanyDesc?.trim() || null),
+    company_info: hasAnyValue(companyInfoObj) ? (companyInfoObj as CompanyInfo) : null,
+    icp_scores: hasAnyValue(icpScoresObj) ? (icpScoresObj as IcpScores) : null,
   }
 }
 
@@ -463,6 +544,9 @@ export async function upsertLeadsAndFillLeadCampaigns(
         expertise: row.expertise ?? undefined,
         followers_count: toIntOrUndefined(row.followers_count),
         connections_count: toIntOrUndefined(row.connections_count),
+        company_description: row.company_description ?? undefined,
+        company_info: row.company_info ?? undefined,
+        icp_scores: row.icp_scores ?? undefined,
         is_campaigned: "true",
         created_at: now,
         updated_at: now,

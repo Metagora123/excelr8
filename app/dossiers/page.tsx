@@ -29,6 +29,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Progress } from "@/components/ui/progress"
 import {
   FileTextIcon,
   SearchIcon,
@@ -63,6 +64,25 @@ type DossierLead = {
   expertise?: string | null
   tech_stack_tags?: string | null
   company_description?: string | null
+  company_info?: {
+    industry?: string | null
+    segment?: string | null
+    type?: string | null
+    employee_range?: string | null
+    employee_count?: number | null
+    year_founded?: number | null
+    specialties?: string | string[] | null
+    sales_navigator_url?: string | null
+    recommended_action?: string | null
+    recommended_next_enrichment?: string | null
+  } | null
+  icp_scores?: {
+    priority_score?: number | null
+    confidence_score?: number | null
+    icp_risk_score?: number | null
+    technographic_fit_score?: number | null
+    firmographic_fit_score?: number | null
+  } | null
   followers_count?: number | null
   connections_count?: number | null
   created_at?: string | null
@@ -92,6 +112,21 @@ function formatDate(s: string | null | undefined) {
   } catch {
     return null
   }
+}
+
+/** Normalize Clay specialties (array or delimited string) into a clean tag list. */
+function toSpecialtyList(v: string | string[] | null | undefined): string[] {
+  if (!v) return []
+  const raw = Array.isArray(v) ? v : String(v).split(/[,;|]/)
+  return raw.map((s) => String(s).replace(/^['"\[\]]+|['"\[\]]+$/g, "").trim()).filter(Boolean)
+}
+
+/** Coerce a score value to a number in 0..100, or null. */
+function toScore(v: unknown): number | null {
+  if (v == null || v === "") return null
+  const n = typeof v === "number" ? v : Number(v)
+  if (!Number.isFinite(n)) return null
+  return Math.max(0, Math.min(100, n))
 }
 
 /** Ensure URL is absolute so it opens correctly in a new tab. */
@@ -520,6 +555,109 @@ export default function DossiersPage() {
                     <p className="text-sm text-muted-foreground leading-relaxed">{selected.company_description}</p>
                   </div>
                 )}
+
+                {/* Company intelligence (Clay) */}
+                {(() => {
+                  const ci = selected.company_info
+                  if (!ci) return null
+                  const facts: { label: string; value: string }[] = []
+                  if ((ci.industry ?? "").toString().trim()) facts.push({ label: "Industry", value: String(ci.industry) })
+                  if ((ci.segment ?? "").toString().trim()) facts.push({ label: "Segment", value: String(ci.segment) })
+                  if ((ci.type ?? "").toString().trim()) facts.push({ label: "Type", value: String(ci.type) })
+                  if ((ci.employee_range ?? "").toString().trim()) facts.push({ label: "Employees", value: String(ci.employee_range) })
+                  else if (ci.employee_count != null) facts.push({ label: "Employees", value: String(ci.employee_count) })
+                  if (ci.year_founded != null && String(ci.year_founded).trim()) facts.push({ label: "Founded", value: String(ci.year_founded) })
+                  const specialties = toSpecialtyList(ci.specialties)
+                  const salesNav = (ci.sales_navigator_url ?? "").toString().trim()
+                  if (facts.length === 0 && specialties.length === 0 && !salesNav) return null
+                  return (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-2">Company intelligence</h3>
+                      {facts.length > 0 && (
+                        <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                          {facts.map((f) => (
+                            <div key={f.label} className="flex flex-col">
+                              <span className="text-xs uppercase tracking-wider text-muted-foreground">{f.label}</span>
+                              <span>{f.value}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {specialties.length > 0 && (
+                        <div className="mt-3 flex flex-wrap gap-2">
+                          {specialties.map((tag) => (
+                            <Badge key={tag} variant="secondary" className="font-normal">{tag}</Badge>
+                          ))}
+                        </div>
+                      )}
+                      {salesNav && (
+                        <Button variant="outline" size="sm" asChild className="mt-3 gap-2">
+                          <Link href={toAbsoluteUrl(salesNav) ?? "#"} target="_blank" rel="noopener noreferrer">
+                            <Linkedin className="h-3.5 w-3.5" />
+                            Sales Navigator
+                          </Link>
+                        </Button>
+                      )}
+                    </div>
+                  )
+                })()}
+
+                {/* Fit scorecard (Clay ICP scores) */}
+                {(() => {
+                  const sc = selected.icp_scores
+                  if (!sc) return null
+                  const rows: { label: string; value: number; hint?: string }[] = []
+                  const push = (label: string, v: unknown, hint?: string) => {
+                    const n = toScore(v)
+                    if (n != null) rows.push({ label, value: n, hint })
+                  }
+                  push("Priority", sc.priority_score)
+                  push("Confidence", sc.confidence_score)
+                  push("ICP risk", sc.icp_risk_score, "lower is better")
+                  push("Technographic fit", sc.technographic_fit_score)
+                  push("Firmographic fit", sc.firmographic_fit_score)
+                  if (rows.length === 0) return null
+                  return (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-2">Fit scorecard</h3>
+                      <div className="space-y-2.5">
+                        {rows.map((r) => (
+                          <div key={r.label}>
+                            <div className="flex items-center justify-between text-sm">
+                              <span>
+                                {r.label}
+                                {r.hint && <span className="text-muted-foreground"> ({r.hint})</span>}
+                              </span>
+                              <span className="tabular-nums font-medium">{r.value}</span>
+                            </div>
+                            <Progress value={r.value} className="mt-1 h-1.5" />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })()}
+
+                {/* Next steps (Clay recommendations) */}
+                {(() => {
+                  const ci = selected.company_info
+                  const action = (ci?.recommended_action ?? "").toString().trim()
+                  const next = (ci?.recommended_next_enrichment ?? "").toString().trim()
+                  if (!action && !next) return null
+                  return (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-1.5">Next steps</h3>
+                      <div className="space-y-2 text-sm text-muted-foreground leading-relaxed">
+                        {action && (
+                          <p><span className="font-medium text-foreground">Recommended action: </span>{action}</p>
+                        )}
+                        {next && (
+                          <p><span className="font-medium text-foreground">Next enrichment: </span>{next}</p>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Social reach */}
                 {(typeof selected.followers_count === "number" || typeof selected.connections_count === "number") && (

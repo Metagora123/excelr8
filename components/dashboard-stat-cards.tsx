@@ -14,7 +14,29 @@ import {
   TooltipTrigger,
   TooltipProvider,
 } from "@/components/ui/tooltip"
-import { UsersIcon, FileTextIcon, TrendingUpIcon, DatabaseIcon } from "lucide-react"
+import { UsersIcon, FileTextIcon, TrendingUpIcon, RefreshCwIcon } from "lucide-react"
+
+export type HubSpotSyncSummary = {
+  lastSyncAt: string
+  status: string
+  trigger: string
+  contacts: number
+} | null
+
+/** Compact relative time like "2h ago", "3d ago", or a date for older runs. */
+function relativeTime(iso: string): string {
+  const then = new Date(iso).getTime()
+  if (!Number.isFinite(then)) return "—"
+  const diffMs = Date.now() - then
+  const mins = Math.floor(diffMs / 60000)
+  if (mins < 1) return "just now"
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  if (days < 7) return `${days}d ago`
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+}
 
 type StatCardProps = {
   title: string
@@ -62,12 +84,22 @@ export function DashboardStatCards({
   withDossiers,
   dossierPct,
   averageScore,
+  hubspotSync,
 }: {
   total: number
   withDossiers: number
   dossierPct: number
   averageScore: number
+  hubspotSync?: HubSpotSyncSummary
 }) {
+  const syncValue = hubspotSync ? relativeTime(hubspotSync.lastSyncAt) : "Never"
+  const syncSubtitle = hubspotSync
+    ? `${hubspotSync.contacts.toLocaleString()} contacts • ${hubspotSync.status}`
+    : "No sync run yet"
+  const syncTooltip = hubspotSync
+    ? `Last ${hubspotSync.trigger} sync ${new Date(hubspotSync.lastSyncAt).toLocaleString()} — status: ${hubspotSync.status}`
+    : "Run a sync from the HubSpot page, or wait for the daily scheduled sync."
+
   return (
     <TooltipProvider>
       <div className="grid grid-cols-1 gap-4 px-4 @xl/main:grid-cols-2 @5xl/main:grid-cols-4 lg:px-6">
@@ -91,10 +123,11 @@ export function DashboardStatCards({
           tooltip="Average lead score across all leads"
         />
         <StatCard
-          title="Data Source"
-          value="Supabase"
-          subtitle="leads table"
-          icon={<DatabaseIcon />}
+          title="HubSpot Sync"
+          value={syncValue}
+          subtitle={syncSubtitle}
+          icon={<RefreshCwIcon />}
+          tooltip={syncTooltip}
         />
       </div>
     </TooltipProvider>

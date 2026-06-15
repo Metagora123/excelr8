@@ -1,0 +1,458 @@
+{
+  "name": "LinkedIn Outreach (Unipile + Airtable)",
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "pinData": {},
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## SETUP (read me first)\n\n**1. Airtable table** — create a table (e.g. `LinkedIn Outreach`) in base `appmn0qxztijCXMQT` with these fields:\n- `profile_id` (Single line text) — the Unipile provider id (`ACoAA...`). This is the match key.\n- `linkedin_url, first_name, last_name, title` (text)\n- `status` (**Single select**) options: `Fresh, Invited, Accepted, First Msg Sent, Follow-up 1 Sent, Follow-up 2 Sent, Replied, Done, Failed` (typecast auto-creates them on first write, but pre-adding is cleaner)\n- `invited_at, accepted_at, first_msg_at, fu1_at, fu2_at, replied_at` (Date w/ time, OR plain text)\n- `chat_id, last_error` (text)\nSeed each lead with `status = Fresh`.\n\n**2. Credentials**\n- Airtable nodes → your Airtable Personal Access Token credential, and set Table on each node (replace `YOUR_TABLE_ID`).\n- HTTP nodes → a **Header Auth** credential `X-API-KEY = <UNIPILE_API_KEY>`.\n\n**3. Constants inlined**: base `https://api17.unipile.com:14713`, `account_id=0oycWCPlQW-X-LP9jEC1_Q`. Change if needed.\n\n**4. Timezone**: the business-hours guard uses the workflow timezone. Set it in this workflow's Settings to your local zone (self-hosted n8n defaults to the server TZ, often UTC).\n\n**5. Concurrency**: if your n8n supports it, set this workflow to max 1 concurrent execution (Settings) so a slow engine tick can't overlap itself. Otherwise the 2-min interval + small batch keeps overlap unlikely.\n\n**6. DEMO timers**: `Decide actions` has `DEMO=true` (2-min waits). Flip to `false` for real day-1/day-2 delays.",
+        "height": 560,
+        "width": 560
+      },
+      "id": "note-setup",
+      "name": "Setup Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-620, -60]
+    },
+    {
+      "parameters": {
+        "content": "### A) Invite Sender (cron)\nGuarded to Mon-Fri 9-5 (workflow TZ). Picks `Fresh` rows, caps at 25, sends invites (no note, throttled 1/2s). `Invited`, or `Failed` on hard errors. `422 already_invited_recently` is treated as `Invited` (a pending invite already exists), not a failure.",
+        "height": 200,
+        "width": 1180
+      },
+      "id": "note-a",
+      "name": "Lane A Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-20, -230]
+    },
+    {
+      "parameters": {
+        "content": "### B) Engine (cron, every 2 min) — the ONLY sender\nGuarded to Mon-Fri 9-5. Per row: `Accepted` -> send first message (starts chat, stores `chat_id`) -> `First Msg Sent`; `First Msg Sent`+1d -> FU1; `Follow-up 1 Sent`+1d (chained) -> FU2; `Follow-up 2 Sent` -> `Done`. Skips `Replied/Done/Failed`. If a send fails the row keeps its prior status and retries next tick.",
+        "height": 240,
+        "width": 1640
+      },
+      "id": "note-b",
+      "name": "Lane B Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-20, 150]
+    },
+    {
+      "parameters": {
+        "content": "### C) Acceptance Recorder (webhook `new_relation`)\nRegister a Unipile USERS webhook -> this URL. Only records state: matches an `Invited` row by `provider_id`, sets `Accepted`. Idempotent (acts only if currently `Invited`). The Engine sends the first message.\n\n**Simulate:** POST `{ \"event\":\"new_relation\", \"account_id\":\"0oycWCPlQW-X-LP9jEC1_Q\", \"user_provider_id\":\"<a profile_id>\", \"user_full_name\":\"Test\" }`",
+        "height": 230,
+        "width": 1180
+      },
+      "id": "note-c",
+      "name": "Lane C Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-20, 560]
+    },
+    {
+      "parameters": {
+        "content": "### D) Reply Recorder (webhook new message)\nRegister a Unipile MESSAGING webhook -> this URL. Ignores our own outbound; on a real inbound reply sets `Replied` + `replied_at`, which makes the Engine skip the lead forever. NOT time-guarded (replies recorded 24/7).\n\n**Simulate:** POST `{ \"event\":\"message_received\", \"account_id\":\"0oycWCPlQW-X-LP9jEC1_Q\", \"chat_id\":\"<chat_id on the row>\" }`",
+        "height": 230,
+        "width": 1180
+      },
+      "id": "note-d",
+      "name": "Lane D Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-20, 880]
+    },
+
+    {
+      "parameters": { "rule": { "interval": [ { "field": "hours", "hoursInterval": 6 } ] } },
+      "id": "a-sched",
+      "name": "Invite Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [40, 0]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "a-read",
+      "name": "Read records (Invite)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [240, 0],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const wd=$now.weekday;const hr=$now.hour;if(!(wd>=1&&wd<=5&&hr>=9&&hr<17))return [];const CAP=25;const out=[];for(const r of $input.all()){const j=r.json;const s=String(j.status||'').trim();if(s===''||s==='Fresh'){out.push({json:{profile_id:j.profile_id,first_name:j.first_name||''}});}if(out.length>=CAP)break;}return out;"
+      },
+      "id": "a-pick",
+      "name": "Pick Fresh leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 0]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api17.unipile.com:14713/api/v1/users/invite",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [ { "name": "accept", "value": "application/json" } ] },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ provider_id: $json.profile_id, account_id: '0oycWCPlQW-X-LP9jEC1_Q' }) }}",
+        "options": { "batching": { "batch": { "batchSize": 1, "batchInterval": 2000 } } }
+      },
+      "id": "a-invite",
+      "name": "Send invite",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [640, 0],
+      "onError": "continueRegularOutput",
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE_UNIPILE_CRED", "name": "Unipile X-API-KEY" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const items=$input.all();const src=$('Pick Fresh leads').all();const out=[];for(let i=0;i<items.length;i++){const j=items[i].json;const s=(src[i]&&src[i].json)||{};const txt=JSON.stringify(j||{});const already=/already_invited|already invited|cannot_resend/i.test(txt);const isErr=j.error!==undefined||(j.statusCode&&Number(j.statusCode)>=400);const failed=isErr&&!already;const o={profile_id:s.profile_id,status:failed?'Failed':'Invited'};if(!failed){o.invited_at=new Date().toISOString();}else{o.last_error=String(txt).slice(0,300);}out.push({json:o});}return out;"
+      },
+      "id": "a-build",
+      "name": "Build invite status",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 0]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [ "profile_id" ], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": false },
+        "options": { "typecast": true }
+      },
+      "id": "a-upsert",
+      "name": "Upsert (Invite)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1040, 0],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+
+    {
+      "parameters": { "rule": { "interval": [ { "field": "minutes", "minutesInterval": 2 } ] } },
+      "id": "b-sched",
+      "name": "Engine Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [40, 380]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "b-read",
+      "name": "Read records (Engine)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [240, 380],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const DEMO=true;const d1=DEMO?2*60*1000:24*60*60*1000;const d2=DEMO?2*60*1000:24*60*60*1000;const wd=$now.weekday;const hr=$now.hour;if(!(wd>=1&&wd<=5&&hr>=9&&hr<17))return [];const FU1='just following up on my note - keen to hear your thoughts when you have a sec.';const FU2='last nudge from me - happy to share more whenever it is useful. Glad to be connected either way.';const now=Date.now();const out=[];for(const r of $input.all()){const j=r.json;const s=String(j.status||'').trim();const f=j.first_name||'there';if(s==='Accepted'){out.push({json:{profile_id:j.profile_id,action:'first',first_name:f}});}else if(s==='First Msg Sent'&&j.first_msg_at&&(now-Date.parse(j.first_msg_at)>=d1)){out.push({json:{profile_id:j.profile_id,action:'followup',chat_id:j.chat_id,text:'Hi '+f+', '+FU1,status_to_set:'Follow-up 1 Sent',ts_field:'fu1_at'}});}else if(s==='Follow-up 1 Sent'&&j.fu1_at&&(now-Date.parse(j.fu1_at)>=d2)){out.push({json:{profile_id:j.profile_id,action:'followup',chat_id:j.chat_id,text:'Hi '+f+', '+FU2,status_to_set:'Follow-up 2 Sent',ts_field:'fu2_at'}});}else if(s==='Follow-up 2 Sent'){out.push({json:{profile_id:j.profile_id,action:'done'}});}}return out;"
+      },
+      "id": "b-decide",
+      "name": "Decide actions",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [ { "id": "is-done", "leftValue": "={{ $json.action }}", "rightValue": "done", "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b-if-done",
+      "name": "Is done?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [640, 380]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const d=$json;return {json:{profile_id:d.profile_id,status:'Done'}};"
+      },
+      "id": "b-build-done",
+      "name": "Build done update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [840, 520]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "loose", "version": 2 },
+          "conditions": [ { "id": "is-first", "leftValue": "={{ $json.action }}", "rightValue": "first", "operator": { "type": "string", "operation": "equals", "name": "filter.operator.equals" } } ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "b-if-first",
+      "name": "Is first message?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [840, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api17.unipile.com:14713/api/v1/chats",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": { "parameters": [
+          { "name": "account_id", "value": "0oycWCPlQW-X-LP9jEC1_Q" },
+          { "name": "attendees_ids", "value": "={{ $json.profile_id }}" },
+          { "name": "text", "value": "={{ 'Hi ' + ($json.first_name || 'there') + ', thanks for connecting! Keen to hear what you are focused on this quarter.' }}" },
+          { "name": "linkedin[api]", "value": "classic" }
+        ] },
+        "options": {}
+      },
+      "id": "b-http-first",
+      "name": "Send first message",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 220],
+      "onError": "continueRegularOutput",
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE_UNIPILE_CRED", "name": "Unipile X-API-KEY" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const d=$('Decide actions').item.json;const resp=$json||{};if(resp.error!==undefined)return {json:{profile_id:d.profile_id,status:'Accepted',last_error:String(JSON.stringify(resp.error)).slice(0,300)}};const now=new Date().toISOString();return {json:{profile_id:d.profile_id,status:'First Msg Sent',first_msg_at:now,chat_id:resp.chat_id||''}};"
+      },
+      "id": "b-build-first",
+      "name": "Build first-msg update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 220]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api17.unipile.com:14713/api/v1/chats/' + $json.chat_id + '/messages' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": { "parameters": [ { "name": "text", "value": "={{ $json.text }}" } ] },
+        "options": {}
+      },
+      "id": "b-http-fu",
+      "name": "Send follow-up",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1040, 380],
+      "onError": "continueRegularOutput",
+      "credentials": { "httpHeaderAuth": { "id": "REPLACE_UNIPILE_CRED", "name": "Unipile X-API-KEY" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const d=$('Decide actions').item.json;const resp=$json||{};if(resp.error!==undefined)return {json:{profile_id:d.profile_id,last_error:String(JSON.stringify(resp.error)).slice(0,300)}};const o={profile_id:d.profile_id,status:d.status_to_set};o[d.ts_field]=new Date().toISOString();return {json:o};"
+      },
+      "id": "b-build-fu",
+      "name": "Build follow-up update",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1240, 380]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [ "profile_id" ], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": false },
+        "options": { "typecast": true }
+      },
+      "id": "b-upsert",
+      "name": "Upsert (Engine)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [1460, 380],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+
+    {
+      "parameters": { "httpMethod": "POST", "path": "unipile-new-relation", "responseMode": "onReceived", "options": {} },
+      "id": "c-webhook",
+      "name": "Accept webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [40, 760],
+      "webhookId": "a1b2c3d4-new-relation"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const b=$json.body||$json;return [{json:{provider_id:b.user_provider_id||b.provider_id||'',full_name:b.user_full_name||'',event:b.event||''}}];"
+      },
+      "id": "c-extract",
+      "name": "Extract new_relation",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 760]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "c-read",
+      "name": "Read records (Accept)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [440, 760],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const m=$('Extract new_relation').first().json;const pid=String(m.provider_id||'').trim();if(!pid)return [];const rows=$input.all();const row=rows.find(r=>String(r.json.profile_id||'').trim()===pid);if(!row)return [];const s=String(row.json.status||'').trim();if(s!=='Invited')return [];return [{json:{profile_id:row.json.profile_id,status:'Accepted',accepted_at:new Date().toISOString()}}];"
+      },
+      "id": "c-match",
+      "name": "Match accepted",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 760]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [ "profile_id" ], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": false },
+        "options": { "typecast": true }
+      },
+      "id": "c-upsert",
+      "name": "Upsert (Accept)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [840, 760],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+
+    {
+      "parameters": { "httpMethod": "POST", "path": "unipile-new-message", "responseMode": "onReceived", "options": {} },
+      "id": "d-webhook",
+      "name": "Reply webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [40, 1080],
+      "webhookId": "e5f6g7h8-new-message"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const b=$json.body||$json;return [{json:{event:b.event||'',account_id:b.account_id||'',chat_id:b.chat_id||(b.chat&&b.chat.id)||'',sender_id:(b.sender&&(b.sender.attendee_provider_id||b.sender.provider_id))||b.from||''}}];"
+      },
+      "id": "d-extract",
+      "name": "Extract new_message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 1080]
+    },
+    {
+      "parameters": {
+        "operation": "search",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "returnAll": true,
+        "options": {}
+      },
+      "id": "d-read",
+      "name": "Read records (Reply)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [440, 1080],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const m=$('Extract new_message').first().json;const ev=String(m.event||'').toLowerCase();if(ev.includes('sent')||ev.includes('delivered'))return [];const chatId=String(m.chat_id||'').trim();const sender=String(m.sender_id||'').trim();const rows=$input.all();let row=null;if(chatId)row=rows.find(r=>String(r.json.chat_id||'').trim()===chatId);if(!row&&sender)row=rows.find(r=>String(r.json.profile_id||'').trim()===sender);if(!row)return [];const s=String(row.json.status||'').trim();if(s==='Replied'||s==='Done')return [];return [{json:{profile_id:row.json.profile_id,status:'Replied',replied_at:new Date().toISOString()}}];"
+      },
+      "id": "d-match",
+      "name": "Match reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [640, 1080]
+    },
+    {
+      "parameters": {
+        "operation": "upsert",
+        "base": { "__rl": true, "value": "appmn0qxztijCXMQT", "mode": "id" },
+        "table": { "__rl": true, "value": "YOUR_TABLE_ID", "mode": "id", "cachedResultName": "LinkedIn Outreach" },
+        "columns": { "mappingMode": "autoMapInputData", "value": {}, "matchingColumns": [ "profile_id" ], "schema": [], "attemptToConvertTypes": false, "convertFieldsToString": false },
+        "options": { "typecast": true }
+      },
+      "id": "d-upsert",
+      "name": "Upsert (Reply)",
+      "type": "n8n-nodes-base.airtable",
+      "typeVersion": 2.1,
+      "position": [840, 1080],
+      "credentials": { "airtableTokenApi": { "id": "REPLACE_AIRTABLE_CRED", "name": "Airtable PAT" } }
+    }
+  ],
+  "connections": {
+    "Invite Schedule": { "main": [ [ { "node": "Read records (Invite)", "type": "main", "index": 0 } ] ] },
+    "Read records (Invite)": { "main": [ [ { "node": "Pick Fresh leads", "type": "main", "index": 0 } ] ] },
+    "Pick Fresh leads": { "main": [ [ { "node": "Send invite", "type": "main", "index": 0 } ] ] },
+    "Send invite": { "main": [ [ { "node": "Build invite status", "type": "main", "index": 0 } ] ] },
+    "Build invite status": { "main": [ [ { "node": "Upsert (Invite)", "type": "main", "index": 0 } ] ] },
+
+    "Engine Schedule": { "main": [ [ { "node": "Read records (Engine)", "type": "main", "index": 0 } ] ] },
+    "Read records (Engine)": { "main": [ [ { "node": "Decide actions", "type": "main", "index": 0 } ] ] },
+    "Decide actions": { "main": [ [ { "node": "Is done?", "type": "main", "index": 0 } ] ] },
+    "Is done?": { "main": [ [ { "node": "Build done update", "type": "main", "index": 0 } ], [ { "node": "Is first message?", "type": "main", "index": 0 } ] ] },
+    "Build done update": { "main": [ [ { "node": "Upsert (Engine)", "type": "main", "index": 0 } ] ] },
+    "Is first message?": { "main": [ [ { "node": "Send first message", "type": "main", "index": 0 } ], [ { "node": "Send follow-up", "type": "main", "index": 0 } ] ] },
+    "Send first message": { "main": [ [ { "node": "Build first-msg update", "type": "main", "index": 0 } ] ] },
+    "Build first-msg update": { "main": [ [ { "node": "Upsert (Engine)", "type": "main", "index": 0 } ] ] },
+    "Send follow-up": { "main": [ [ { "node": "Build follow-up update", "type": "main", "index": 0 } ] ] },
+    "Build follow-up update": { "main": [ [ { "node": "Upsert (Engine)", "type": "main", "index": 0 } ] ] },
+
+    "Accept webhook": { "main": [ [ { "node": "Extract new_relation", "type": "main", "index": 0 } ] ] },
+    "Extract new_relation": { "main": [ [ { "node": "Read records (Accept)", "type": "main", "index": 0 } ] ] },
+    "Read records (Accept)": { "main": [ [ { "node": "Match accepted", "type": "main", "index": 0 } ] ] },
+    "Match accepted": { "main": [ [ { "node": "Upsert (Accept)", "type": "main", "index": 0 } ] ] },
+
+    "Reply webhook": { "main": [ [ { "node": "Extract new_message", "type": "main", "index": 0 } ] ] },
+    "Extract new_message": { "main": [ [ { "node": "Read records (Reply)", "type": "main", "index": 0 } ] ] },
+    "Read records (Reply)": { "main": [ [ { "node": "Match reply", "type": "main", "index": 0 } ] ] },
+    "Match reply": { "main": [ [ { "node": "Upsert (Reply)", "type": "main", "index": 0 } ] ] }
+  }
+}

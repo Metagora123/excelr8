@@ -5,10 +5,13 @@
  * @see https://developers.hubspot.com/docs/api/crm/deals
  */
 
-import { getHubSpotAccessToken, getHubSpotApiBase } from "./env"
+import { getHubSpotAccessToken, getHubSpotApiBase, getHubSpotSyncCompanyProps } from "./env"
+import type { CompanyInfo, IcpScores } from "./leadQueries"
 
 const PROFILE_URL_PROPERTY = "excelr8_profile_url"
 let canUseProfileUrlProperty = true
+// Disabled at runtime if the custom company/score properties don't exist in HubSpot yet.
+let canUseCompanyProps = true
 
 function getApiBase(): string {
   return getHubSpotApiBase()
@@ -48,12 +51,20 @@ function getHeaders(): Record<string, string> {
   }
 }
 
-function isMissingProfileUrlPropertyError(errorText: string): boolean {
-  if (!errorText) return false
-  return (
-    errorText.includes("PROPERTY_DOESNT_EXIST") &&
-    errorText.includes(`"${PROFILE_URL_PROPERTY}"`)
-  )
+/** Extract any excelr8_* custom property names HubSpot reports as missing (PROPERTY_DOESNT_EXIST). */
+function extractMissingExcelr8Properties(errorText: string): string[] {
+  if (!errorText || !errorText.includes("PROPERTY_DOESNT_EXIST")) return []
+  const names = new Set<string>()
+  const re = /"(excelr8_[a-zA-Z0-9_]+)"/g
+  let m: RegExpExecArray | null
+  while ((m = re.exec(errorText)) !== null) names.add(m[1])
+  return [...names]
+}
+
+/** Disable a custom property group for the rest of this sync once HubSpot reports it missing. */
+function noteDisabledProperty(name: string): void {
+  if (name === PROFILE_URL_PROPERTY) canUseProfileUrlProperty = false
+  else canUseCompanyProps = false
 }
 
 export type LeadForHubSpot = {
@@ -67,6 +78,8 @@ export type LeadForHubSpot = {
   status?: string | null
   profile_url?: string | null
   about_summary?: string | null
+  company_info?: CompanyInfo | null
+  icp_scores?: IcpScores | null
 }
 
 export type CampaignForHubSpot = {
@@ -109,14 +122,14 @@ export async function findContactByEmail(email: string): Promise<string | null> 
   return id
 }
 
-/** Create or update a HubSpot contact from a lead. Returns HubSpot contact id. */
-export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
+/** Build the HubSpot contact property map for a lead (incl. opt-in Clay company/score props). */
+function buildContactProperties(lead: LeadForHubSpot): Record<string, string> {
   const email = (lead.email ?? "").trim()
   const profileUrl = (lead.profile_url ?? "").trim()
   const name = (lead.name ?? "").trim() || "Unknown"
   const parts = name.split(/\s+/)
   const firstName = parts[0] ?? ""
-  const lastName = parts.slice(1).join(" ") ?? ""
+  const lastName = parts.slice(1).join(" ")
 
   const properties: Record<string, string> = {
     firstname: firstName,
@@ -128,18 +141,82 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
     linkedinbio: (lead.about_summary ?? "").slice(0, 65535),
   }
   // Only set email if we have a real one; HubSpot validates format strictly.
-  if (email) {
-    properties.email = email
-  }
-  if (profileUrl && canUseProfileUrlProperty) {
-    // Custom property you should create in HubSpot (single-line text):
-    // excelr8_profile_url – used for dedupe when email is missing.
-    properties[PROFILE_URL_PROPERTY] = profileUrl
-  }
+  if (email) properties.email = email
+  // Custom property (single-line text): excelr8_profile_url - used for dedupe when email is missing.
+  if (profileUrl && canUseProfileUrlProperty) properties[PROFILE_URL_PROPERTY] = profileUrl
   const mappedStatus = mapLeadStatusToHubSpot(lead.status)
-  if (mappedStatus) {
-    properties.hs_lead_status = mappedStatus
+  if (mappedStatus) properties.hs_lead_status = mappedStatus
+
+  // Clay company intelligence + core scores -> custom contact properties (opt-in).
+  if (getHubSpotSyncCompanyProps() && canUseCompanyProps) {
+    const setText = (key: string, val: unknown) => {
+      const s = val == null ? "" : Array.isArray(val) ? val.join(", ") : String(val)
+      if (s.trim()) properties[key] = s.trim().slice(0, 65535)
+    }
+    const setNum = (key: string, val: unknown) => {
+      const n = typeof val === "number" ? val : val != null && val !== "" && Number.isFinite(Number(val)) ? Number(val) : null
+      if (n != null) properties[key] = String(n)
+    }
+    const ci = lead.company_info
+    if (ci) {
+      setText("excelr8_company_industry", ci.industry)
+      setText("excelr8_company_segment", ci.segment)
+      setText("excelr8_company_type", ci.type)
+      setText("excelr8_company_employee_range", ci.employee_range)
+      setNum("excelr8_company_employee_count", ci.employee_count)
+      setNum("excelr8_company_year_founded", ci.year_founded)
+      setText("excelr8_company_specialties", ci.specialties)
+      setText("excelr8_sales_navigator_url", ci.sales_navigator_url)
+    }
+    const sc = lead.icp_scores
+    if (sc) {
+      setNum("excelr8_priority_score", sc.priority_score)
+      setNum("excelr8_icp_risk_score", sc.icp_risk_score)
+    }
   }
+  return properties
+}
+
+/**
+ * Send a contact create/update; on PROPERTY_DOESNT_EXIST for excelr8_* custom props,
+ * strip the missing props (and disable that group for the rest of the sync) and retry once.
+ */
+async function sendContactRequest(
+  url: string,
+  method: "POST" | "PATCH",
+  properties: Record<string, string>
+): Promise<{ ok: boolean; status: number; id?: string; errorText?: string }> {
+  const doFetch = () =>
+    fetch(url, { method, headers: getHeaders(), body: JSON.stringify({ properties }) })
+
+  let res = await doFetch()
+  if (!res.ok) {
+    const errText = await res.text()
+    const missing = extractMissingExcelr8Properties(errText)
+    let stripped = false
+    for (const p of missing) {
+      if (Object.prototype.hasOwnProperty.call(properties, p)) {
+        delete properties[p]
+        stripped = true
+      }
+      noteDisabledProperty(p)
+    }
+    if (!stripped) return { ok: false, status: res.status, errorText: errText }
+    res = await doFetch()
+    if (!res.ok) {
+      const retryErr = await res.text()
+      return { ok: false, status: res.status, errorText: retryErr }
+    }
+  }
+  const data = (await res.json()) as { id: string }
+  return { ok: true, status: res.status, id: data.id }
+}
+
+/** Create or update a HubSpot contact from a lead. Returns HubSpot contact id. */
+export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
+  const email = (lead.email ?? "").trim()
+  const profileUrl = (lead.profile_url ?? "").trim()
+  const properties = buildContactProperties(lead)
 
   let existingId = email ? await findContactByEmail(email) : null
   if (!existingId && !email && profileUrl && canUseProfileUrlProperty) {
@@ -151,65 +228,16 @@ export async function upsertContact(lead: LeadForHubSpot): Promise<string> {
       // If the custom property doesn't exist yet or search fails, ignore and create a new contact.
     }
   }
+
   if (existingId) {
-    const updateRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, {
-      method: "PATCH",
-      headers: getHeaders(),
-      body: JSON.stringify({ properties }),
-    })
-    if (!updateRes.ok) {
-      const err = await updateRes.text()
-      if (
-        Object.prototype.hasOwnProperty.call(properties, PROFILE_URL_PROPERTY) &&
-        isMissingProfileUrlPropertyError(err)
-      ) {
-        canUseProfileUrlProperty = false
-        delete properties[PROFILE_URL_PROPERTY]
-        const retryRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, {
-          method: "PATCH",
-          headers: getHeaders(),
-          body: JSON.stringify({ properties }),
-        })
-        if (!retryRes.ok) {
-          const retryErr = await retryRes.text()
-          throw new Error(`HubSpot contact update failed: ${retryRes.status} ${retryErr}`)
-        }
-      } else {
-        throw new Error(`HubSpot contact update failed: ${updateRes.status} ${err}`)
-      }
-    }
+    const r = await sendContactRequest(`${getApiBase()}/crm/v3/objects/contacts/${existingId}`, "PATCH", properties)
+    if (!r.ok) throw new Error(`HubSpot contact update failed: ${r.status} ${r.errorText}`)
     return existingId
   }
 
-  const res = await fetch(`${getApiBase()}/crm/v3/objects/contacts`, {
-    method: "POST",
-    headers: getHeaders(),
-    body: JSON.stringify({ properties }),
-  })
-  if (!res.ok) {
-    const err = await res.text()
-    if (
-      Object.prototype.hasOwnProperty.call(properties, PROFILE_URL_PROPERTY) &&
-      isMissingProfileUrlPropertyError(err)
-    ) {
-      canUseProfileUrlProperty = false
-      delete properties[PROFILE_URL_PROPERTY]
-      const retryRes = await fetch(`${getApiBase()}/crm/v3/objects/contacts`, {
-        method: "POST",
-        headers: getHeaders(),
-        body: JSON.stringify({ properties }),
-      })
-      if (!retryRes.ok) {
-        const retryErr = await retryRes.text()
-        throw new Error(`HubSpot contact create failed: ${retryRes.status} ${retryErr}`)
-      }
-      const retryData = (await retryRes.json()) as { id: string }
-      return retryData.id
-    }
-    throw new Error(`HubSpot contact create failed: ${res.status} ${err}`)
-  }
-  const data = (await res.json()) as { id: string }
-  return data.id
+  const r = await sendContactRequest(`${getApiBase()}/crm/v3/objects/contacts`, "POST", properties)
+  if (!r.ok) throw new Error(`HubSpot contact create failed: ${r.status} ${r.errorText}`)
+  return r.id as string
 }
 
 /** Search for a deal by name (first match). Returns HubSpot deal id or null */
@@ -256,7 +284,7 @@ export async function findContactByProfileUrl(url: string): Promise<string | nul
   })
   if (!res.ok) {
     const err = await res.text()
-    if (isMissingProfileUrlPropertyError(err)) {
+    if (extractMissingExcelr8Properties(err).includes(PROFILE_URL_PROPERTY)) {
       canUseProfileUrlProperty = false
       return null
     }

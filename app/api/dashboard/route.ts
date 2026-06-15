@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server"
 import { getStats, getTimelineData, getAllLeads } from "@/lib/leadQueries"
+import { getLatestSyncRun } from "@/lib/syncRuns"
 
 function parseProject(v: string | null): "sales2k25" | "prod2k26" {
   return v === "prod2k26" ? "prod2k26" : "sales2k25"
@@ -9,10 +10,11 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url)
     const project = parseProject(searchParams.get("project"))
-    const [stats, timeline, allLeads] = await Promise.all([
+    const [stats, timeline, allLeads, latestSync] = await Promise.all([
       getStats(project),
       getTimelineData(project),
       getAllLeads(project),
+      getLatestSyncRun(project),
     ])
     const recentLeads = allLeads.slice(0, 10).map((l) => ({
       id: l.id,
@@ -23,6 +25,14 @@ export async function GET(req: Request) {
       score: typeof l.score === "number" ? l.score : 0,
       dossierUrl: l.dossier_url ?? "/dossiers",
     }))
+    const hubspotSync = latestSync
+      ? {
+          lastSyncAt: latestSync.created_at,
+          status: latestSync.status,
+          trigger: latestSync.trigger,
+          contacts: latestSync.contacts_synced,
+        }
+      : null
     return NextResponse.json({
       stats: {
         ...stats,
@@ -30,6 +40,7 @@ export async function GET(req: Request) {
       },
       timeline,
       recentLeads,
+      hubspotSync,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : "Failed to load dashboard data"

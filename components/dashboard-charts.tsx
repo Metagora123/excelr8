@@ -32,7 +32,15 @@ const timelineConfig = {
   score: { label: "Avg Score", color: "var(--primary)" },
 } satisfies ChartConfig
 
+function titleCase(s: string): string {
+  const trimmed = (s ?? "").trim()
+  if (!trimmed) return "Unknown"
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1)
+}
+
 export function LeadsByStatusChart({ data }: { data: { status: string; value: number }[] }) {
+  const chartData = data.map((d) => ({ status: titleCase(d.status), value: d.value }))
+  const total = chartData.reduce((sum, d) => sum + d.value, 0)
   return (
     <Card className="@container/card">
       <CardHeader>
@@ -40,26 +48,39 @@ export function LeadsByStatusChart({ data }: { data: { status: string; value: nu
         <CardDescription>Distribution by lead status</CardDescription>
       </CardHeader>
       <CardContent>
-        <ChartContainer config={statusConfig} className="aspect-square h-[250px]">
+        <ChartContainer config={statusConfig} className="mx-auto aspect-square h-[210px]">
           <PieChart>
-            <ChartTooltip content={<ChartTooltipContent />} />
+            <ChartTooltip content={<ChartTooltipContent hideLabel />} />
             <Pie
-              data={data}
+              data={chartData}
               dataKey="value"
               nameKey="status"
               cx="50%"
               cy="50%"
-              innerRadius={60}
-              outerRadius={90}
+              innerRadius={55}
+              outerRadius={85}
               paddingAngle={2}
-              label={({ status, percent }) => `${status} ${(percent * 100).toFixed(0)}%`}
             >
-              {data.map((_, i) => (
+              {chartData.map((_, i) => (
                 <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
               ))}
             </Pie>
           </PieChart>
         </ChartContainer>
+        <div className="mt-3 flex flex-wrap justify-center gap-x-4 gap-y-1.5">
+          {chartData.map((d, i) => (
+            <div key={d.status} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span
+                className="h-2 w-2 shrink-0 rounded-[2px]"
+                style={{ backgroundColor: PIE_COLORS[i % PIE_COLORS.length] }}
+              />
+              <span>{d.status}</span>
+              <span className="tabular-nums text-foreground">
+                {total ? Math.round((d.value / total) * 100) : 0}%
+              </span>
+            </div>
+          ))}
+        </div>
       </CardContent>
     </Card>
   )
@@ -76,7 +97,7 @@ export function LeadsByTierChart({ data }: { data: { tier: string; value: number
         <ChartContainer config={tierConfig} className="h-[250px] w-full">
           <BarChart data={data} layout="vertical" margin={{ left: 0 }}>
             <XAxis type="number" />
-            <YAxis dataKey="tier" type="category" width={24} />
+            <YAxis dataKey="tier" type="category" width={32} tickMargin={8} />
             <ChartTooltip content={<ChartTooltipContent />} />
             <Bar dataKey="value" fill="var(--primary)" radius={[0, 4, 4, 0]} />
           </BarChart>

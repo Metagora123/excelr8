@@ -1,6 +1,29 @@
 import { getSupabase, type SupabaseProject } from "./supabase"
 import { getAllCampaigns } from "./campaignQueries"
 
+/** Clay company intelligence stored in leads.company_info (jsonb). */
+export type CompanyInfo = {
+  industry?: string | null
+  segment?: string | null
+  type?: string | null
+  employee_range?: string | null
+  employee_count?: number | null
+  year_founded?: number | null
+  specialties?: string | string[] | null
+  sales_navigator_url?: string | null
+  recommended_action?: string | null
+  recommended_next_enrichment?: string | null
+}
+
+/** Clay ICP / fit sub-scores stored in leads.icp_scores (jsonb). OG overall score stays in leads.score. */
+export type IcpScores = {
+  priority_score?: number | null
+  confidence_score?: number | null
+  icp_risk_score?: number | null
+  technographic_fit_score?: number | null
+  firmographic_fit_score?: number | null
+}
+
 export type LeadRow = {
   id: string
   name?: string | null
@@ -21,6 +44,8 @@ export type LeadRow = {
   expertise?: string | null
   tech_stack_tags?: string | null
   company_description?: string | null
+  company_info?: CompanyInfo | null
+  icp_scores?: IcpScores | null
   followers_count?: number | null
   connections_count?: number | null
   created_at?: string | null
@@ -54,6 +79,21 @@ function parseOptionalNumber(v: unknown): number | null {
   return null
 }
 
+/** Parse a jsonb column that may arrive as an object (supabase-js) or a JSON string. */
+function parseJsonObject<T>(v: unknown): T | null {
+  if (v == null) return null
+  if (typeof v === "object") return v as T
+  if (typeof v === "string" && v.trim() !== "") {
+    try {
+      const parsed = JSON.parse(v)
+      return parsed && typeof parsed === "object" ? (parsed as T) : null
+    } catch {
+      return null
+    }
+  }
+  return null
+}
+
 /** Map raw row to LeadRow (handles different column names in Supabase) */
 function mapToLeadRow(row: Record<string, unknown>): LeadRow {
   return {
@@ -76,6 +116,8 @@ function mapToLeadRow(row: Record<string, unknown>): LeadRow {
     expertise: (row.expertise ?? null) as string | null,
     tech_stack_tags: (row.tech_stack_tags ?? row.tech_stack ?? row.skills ?? null) as string | null,
     company_description: (row.company_description ?? null) as string | null,
+    company_info: parseJsonObject<CompanyInfo>(row.company_info),
+    icp_scores: parseJsonObject<IcpScores>(row.icp_scores),
     followers_count: parseOptionalNumber(row.followers_count ?? row.followers ?? row.follower_count),
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections ?? row.connection_count),
     created_at: (row.created_at ?? null) as string | null,
@@ -136,6 +178,8 @@ function mapDossierRow(row: Record<string, unknown>, lead?: LeadRow | null): Lea
     expertise: (row.expertise ?? lead?.expertise ?? null) as string | null,
     tech_stack_tags: (row.tech_stack_tags ?? row.tech_stack ?? lead?.tech_stack_tags ?? null) as string | null,
     company_description: (row.company_description ?? lead?.company_description ?? null) as string | null,
+    company_info: parseJsonObject<CompanyInfo>(row.company_info) ?? lead?.company_info ?? null,
+    icp_scores: parseJsonObject<IcpScores>(row.icp_scores) ?? lead?.icp_scores ?? null,
     followers_count: parseOptionalNumber(row.followers_count ?? row.followers) ?? lead?.followers_count ?? null,
     connections_count: parseOptionalNumber(row.connections_count ?? row.connections) ?? lead?.connections_count ?? null,
     created_at: (row.created_at ?? null) as string | null,
@@ -289,8 +333,11 @@ export async function getStats(project: SupabaseProject = "sales2k25"): Promise<
   for (const l of leads) {
     const s = l.status ?? "Unknown"
     byStatusMap.set(s, (byStatusMap.get(s) ?? 0) + 1)
-    const t = l.tier ?? "Unknown"
-    byTierMap.set(t, (byTierMap.get(t) ?? 0) + 1)
+    // Only count real tiers; skip null/empty/"Unknown" so the Tier chart shows just A/B/C.
+    const t = (l.tier ?? "").trim()
+    if (t && t.toLowerCase() !== "unknown") {
+      byTierMap.set(t, (byTierMap.get(t) ?? 0) + 1)
+    }
     if (typeof l.score === "number" && !Number.isNaN(l.score)) {
       scoreSum += l.score
       scoreCount += 1
