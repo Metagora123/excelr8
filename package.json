@@ -16,7 +16,9 @@
     "hubspot:test": "node scripts/hubspot-pat-test.js",
     "check:radar": "node scripts/check-radar-endpoints.mjs",
     "debug:radar-unipile": "node scripts/debug-radar-unipile-comments.mjs",
-    "docs:pdf": "node scripts/build-client-docs-pdf.js"
+    "docs:pdf": "node scripts/build-client-docs-pdf.js",
+    "migrate:prod-to-sales": "node scripts/migrate-supabase.mjs --from prod2k26 --to sales2k25",
+    "migrate:prod-to-sales:dry-run": "node scripts/migrate-supabase.mjs --from prod2k26 --to sales2k25 --dry-run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.999.0",
