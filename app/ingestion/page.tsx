@@ -19,7 +19,17 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { UploadIcon, Trash2Icon } from "lucide-react"
-import { sliceRows, buildUploadCsvFile } from "@/lib/csv-truncate"
+import {
+  buildUploadCsvFile,
+  countCsvDataRows,
+  formatBytes,
+  isAllRowsPreviewBlocked,
+  sliceRows,
+  VERCEL_UPLOAD_LIMIT_BYTES,
+} from "@/lib/csv-truncate"
+import { formatPreviewError } from "@/lib/preview-errors"
+import { isCsvTooLargeErrorMessage, openCsvTooLargeDialog } from "@/lib/csv-upload-errors"
+import { useCsvTooLargeDialog } from "@/components/csv-too-large-dialog"
 
 /** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
 type PreviewCompanyInfo = {
@@ -49,6 +59,7 @@ function companyPrimaryLine(info: PreviewCompanyInfo): string {
 }
 
 export default function FileIngestionPage() {
+  const csvTooLarge = useCsvTooLargeDialog()
   const [file, setFile] = React.useState<File | null>(null)
   const [endpoint, setEndpoint] = React.useState<"test" | "prod">("test")
   const [supabaseProject, setSupabaseProject] = React.useState<"sales2k25" | "prod2k26">("sales2k25")
@@ -56,6 +67,7 @@ export default function FileIngestionPage() {
   const [status, setStatus] = React.useState<{ type: "success" | "error"; message: string } | null>(null)
   const [isDragging, setIsDragging] = React.useState(false)
   const [allPreviewLeads, setAllPreviewLeads] = React.useState<Array<{ full_name: string | null; email: string | null; profile_url: string | null; company_info: PreviewCompanyInfo; icp_scores: PreviewIcpScores; company_description: string | null }>>([])
+  const [fileCsvRowCount, setFileCsvRowCount] = React.useState<number | null>(null)
   const [previewCsvTotal, setPreviewCsvTotal] = React.useState<number | null>(null)
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
   const [previewLimit, setPreviewLimit] = React.useState<string>("50")
@@ -70,18 +82,37 @@ export default function FileIngestionPage() {
 
   React.useEffect(() => {
     setExcludePreviewIndices([])
+    setAllPreviewLeads([])
+    setPreviewCsvTotal(null)
+    setPreviewError(null)
   }, [previewLimit])
+
+  const applySelectedFile = (f: File) => {
+    setFile(f)
+    setStatus(null)
+    setAllPreviewLeads([])
+    setPreviewCsvTotal(null)
+    setExcludePreviewIndices([])
+    setPreviewError(null)
+    setFileCsvRowCount(null)
+    void countCsvDataRows(f).then(setFileCsvRowCount).catch(() => setFileCsvRowCount(null))
+    if (isAllRowsPreviewBlocked(f)) {
+      openCsvTooLargeDialog(csvTooLarge.show, { fileBytes: f.size })
+    }
+  }
+
+  const showTooLargeFromMessage = (message: string) => {
+    if (isCsvTooLargeErrorMessage(message)) {
+      openCsvTooLargeDialog(csvTooLarge.show, {})
+    }
+  }
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault()
     setIsDragging(false)
     const f = e.dataTransfer.files?.[0]
     if (f?.name.endsWith(".csv")) {
-      setFile(f)
-      setAllPreviewLeads([])
-      setPreviewCsvTotal(null)
-      setExcludePreviewIndices([])
-      setPreviewError(null)
+      applySelectedFile(f)
     } else setStatus({ type: "error", message: "Please upload a CSV file." })
   }
   const handleDragOver = (e: React.DragEvent) => {
@@ -91,12 +122,7 @@ export default function FileIngestionPage() {
   const handleDragLeave = () => setIsDragging(false)
   const handleSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0]
-    if (f) setFile(f)
-    setStatus(null)
-    setAllPreviewLeads([])
-    setPreviewCsvTotal(null)
-    setExcludePreviewIndices([])
-    setPreviewError(null)
+    if (f) applySelectedFile(f)
   }
 
   const removeLeadFromPreview = (rowIndex: number) => {
@@ -105,29 +131,52 @@ export default function FileIngestionPage() {
 
   const handlePreview = async () => {
     if (!file) return
+
+    if (previewLimit === "all" && isAllRowsPreviewBlocked(file)) {
+      const msg = formatPreviewError(413, null, { preflightAll: true })
+      setPreviewError(msg)
+      openCsvTooLargeDialog(csvTooLarge.show, { preflightAll: true, fileBytes: file.size })
+      return
+    }
+
     setPreviewLoading(true)
     setPreviewError(null)
     setAllPreviewLeads([])
     setPreviewCsvTotal(null)
     setExcludePreviewIndices([])
     try {
+      const uploadFile = await buildUploadCsvFile(file, previewLimit, [])
+      if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
+        const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
+        setPreviewError(msg)
+        openCsvTooLargeDialog(csvTooLarge.show, { uploadBytes: uploadFile.size })
+        return
+      }
+
       const formData = new FormData()
-      formData.append("file", file)
+      formData.append("file", uploadFile)
+      formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
       const data = (await res.json().catch(() => ({}))) as {
         leads?: Array<{ full_name?: string | null; email?: string | null; profile_url?: string | null; company_info?: PreviewCompanyInfo; icp_scores?: PreviewIcpScores; company_description?: string | null }>
         total?: number
         error?: string
+        code?: string
       }
       if (!res.ok) {
-        setPreviewError(data.error || res.statusText || "Preview failed")
+        const msg = formatPreviewError(res.status, data)
+        setPreviewError(msg)
+        showTooLargeFromMessage(msg)
         return
       }
       const leads = data.leads ?? []
       setPreviewCsvTotal(typeof data.total === "number" ? data.total : leads.length)
       setAllPreviewLeads(leads.map((l) => ({ full_name: l.full_name ?? null, email: l.email ?? null, profile_url: l.profile_url ?? null, company_info: l.company_info ?? null, icp_scores: l.icp_scores ?? null, company_description: l.company_description ?? null })))
     } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : "Preview failed")
+      const msg =
+        e instanceof Error ? formatPreviewError(0, { error: e.message }) : formatPreviewError(0, null)
+      setPreviewError(msg)
+      showTooLargeFromMessage(msg)
     } finally {
       setPreviewLoading(false)
     }
@@ -138,10 +187,22 @@ export default function FileIngestionPage() {
       setStatus({ type: "error", message: "Select a CSV file first." })
       return
     }
+    if (previewLimit === "all" && isAllRowsPreviewBlocked(file)) {
+      const msg = formatPreviewError(413, null, { preflightAll: true })
+      setStatus({ type: "error", message: msg })
+      openCsvTooLargeDialog(csvTooLarge.show, { preflightAll: true, fileBytes: file.size })
+      return
+    }
     setUploading(true)
     setStatus(null)
     try {
       const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
+      if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
+        const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
+        setStatus({ type: "error", message: msg })
+        openCsvTooLargeDialog(csvTooLarge.show, { uploadBytes: uploadFile.size })
+        return
+      }
       const formData = new FormData()
       formData.append("data", uploadFile)
       formData.append("endpoint", endpoint)
@@ -158,6 +219,7 @@ export default function FileIngestionPage() {
         : ` (${kept} of ${previewLeads.length} rows)`
       setStatus({ type: "success", message: `Upload sent to n8n successfully${limitNote}.` })
       setFile(null)
+      setFileCsvRowCount(null)
       setAllPreviewLeads([])
       setPreviewCsvTotal(null)
       setPreviewError(null)
@@ -228,15 +290,44 @@ export default function FileIngestionPage() {
               />
               <UploadIcon className="mx-auto h-10 w-10 text-muted-foreground mb-2" />
               <p className="text-sm text-muted-foreground">
-                {file ? file.name : "Drop CSV here or click to browse"}
+                {file ? (
+                  <>
+                    {file.name}
+                    <span className="text-muted-foreground/80">
+                      {" "}
+                      · {formatBytes(file.size)}
+                      {fileCsvRowCount != null ? ` · ~${fileCsvRowCount.toLocaleString()} rows` : ""}
+                    </span>
+                  </>
+                ) : (
+                  "Drop CSV here or click to browse"
+                )}
               </p>
             </div>
 
-            <Button onClick={handleSubmit} disabled={!file || uploading}>
-              {uploading ? "Uploading…" : "Upload"}
-            </Button>
-
-            <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="ing-preview-limit" className="text-xs text-muted-foreground whitespace-nowrap">
+                  Rows to upload
+                </Label>
+                <Select value={previewLimit} onValueChange={setPreviewLimit}>
+                  <SelectTrigger id="ing-preview-limit" className="h-8 w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="150">150</SelectItem>
+                    <SelectItem value="200">200</SelectItem>
+                    <SelectItem value="all" disabled={isAllRowsPreviewBlocked(file)}>
+                      All
+                      {fileCsvRowCount != null ? ` (${fileCsvRowCount.toLocaleString()})` : ""}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -246,41 +337,39 @@ export default function FileIngestionPage() {
               >
                 {previewLoading ? "Loading…" : "Preview cleaned leads"}
               </Button>
-              <span className="text-xs text-muted-foreground">
-                Uses same parser as Campaign Manager. Row count selectable.
-              </span>
+              <Button onClick={handleSubmit} disabled={!file || uploading}>
+                {uploading ? "Uploading…" : "Upload"}
+              </Button>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Only the selected row count is sent to the server (hosted deploy has a ~4.5MB upload limit). Changing rows clears preview — click Preview again.
+              {isAllRowsPreviewBlocked(file) && previewLimit !== "all" && (
+                <span className="block mt-1 text-amber-700 dark:text-amber-400">
+                  Full-file upload is disabled for this CSV (too large). Use 50–200 rows or split the file.
+                </span>
+              )}
+            </p>
             {previewError && <p className="text-sm text-destructive">{previewError}</p>}
             {allPreviewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">
                     Parser & cleaner preview ({previewLeads.length.toLocaleString()}
-                    {previewCsvTotal != null && previewCsvTotal > previewLeads.length
-                      ? ` of ${previewCsvTotal.toLocaleString()}`
-                      : ""}{" "}
+                    {fileCsvRowCount != null &&
+                    previewLimit !== "all" &&
+                    fileCsvRowCount > previewLeads.length
+                      ? ` of ${fileCsvRowCount.toLocaleString()} in CSV`
+                      : previewCsvTotal != null && previewCsvTotal > previewLeads.length
+                        ? ` of ${previewCsvTotal.toLocaleString()} parsed`
+                        : ""}{" "}
                     rows)
                   </p>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="ing-preview-limit" className="text-xs text-muted-foreground">Rows to use</Label>
-                    <Select value={previewLimit} onValueChange={setPreviewLimit}>
-                      <SelectTrigger id="ing-preview-limit" className="h-8 w-[110px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="10">10</SelectItem>
-                        <SelectItem value="25">25</SelectItem>
-                        <SelectItem value="50">50</SelectItem>
-                        <SelectItem value="100">100</SelectItem>
-                        <SelectItem value="all">
-                          All ({previewCsvTotal != null ? previewCsvTotal.toLocaleString() : allPreviewLeads.length.toLocaleString()})
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Upload cap: {previewLimit === "all" ? "all rows" : `${previewLimit} rows`}
+                  </p>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want to upload. The “Rows to use” selector caps both this preview and the rows actually uploaded.
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want to upload.
                 </p>
                 <div className="overflow-x-auto rounded border max-h-[320px] overflow-y-auto">
                   <table className="w-full text-xs border-collapse">
@@ -349,6 +438,7 @@ export default function FileIngestionPage() {
           </CardContent>
         </Card>
       </div>
+      {csvTooLarge.dialog}
     </AppShell>
   )
 }

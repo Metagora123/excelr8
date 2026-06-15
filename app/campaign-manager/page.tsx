@@ -29,6 +29,8 @@ import {
   VERCEL_UPLOAD_LIMIT_BYTES,
 } from "@/lib/csv-truncate"
 import { formatPreviewError } from "@/lib/preview-errors"
+import { isCsvTooLargeErrorMessage, openCsvTooLargeDialog } from "@/lib/csv-upload-errors"
+import { useCsvTooLargeDialog } from "@/components/csv-too-large-dialog"
 
 /** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
 type PreviewCompanyInfo = {
@@ -155,6 +157,7 @@ const INLINE_CHECKPOINTS: { key: InlineCheckpointKey; label: string }[] = [
 ]
 
 export default function CampaignManagerPage() {
+  const csvTooLarge = useCsvTooLargeDialog()
   const [campaignName, setCampaignName] = React.useState("")
   const [clientId, setClientId] = React.useState("")
   const [category, setCategory] = React.useState("")
@@ -290,6 +293,15 @@ export default function CampaignManagerPage() {
     setFileCsvRowCount(null)
     if (f) {
       void countCsvDataRows(f).then(setFileCsvRowCount).catch(() => setFileCsvRowCount(null))
+      if (isAllRowsPreviewBlocked(f)) {
+        openCsvTooLargeDialog(csvTooLarge.show, { fileBytes: f.size })
+      }
+    }
+  }
+
+  const showTooLargeFromMessage = (message: string) => {
+    if (isCsvTooLargeErrorMessage(message)) {
+      openCsvTooLargeDialog(csvTooLarge.show, {})
     }
   }
 
@@ -297,7 +309,9 @@ export default function CampaignManagerPage() {
     if (!file) return
 
     if (previewLimit === "all" && isAllRowsPreviewBlocked(file)) {
-      setPreviewError(formatPreviewError(413, null, { preflightAll: true }))
+      const msg = formatPreviewError(413, null, { preflightAll: true })
+      setPreviewError(msg)
+      openCsvTooLargeDialog(csvTooLarge.show, { preflightAll: true, fileBytes: file.size })
       return
     }
 
@@ -310,7 +324,9 @@ export default function CampaignManagerPage() {
     try {
       const uploadFile = await buildUploadCsvFile(file, previewLimit, [])
       if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
-        setPreviewError(formatPreviewError(413, null, { uploadBytes: uploadFile.size }))
+        const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
+        setPreviewError(msg)
+        openCsvTooLargeDialog(csvTooLarge.show, { uploadBytes: uploadFile.size })
         return
       }
 
@@ -334,7 +350,9 @@ export default function CampaignManagerPage() {
         code?: string
       }
       if (!res.ok) {
-        setPreviewError(formatPreviewError(res.status, data))
+        const msg = formatPreviewError(res.status, data)
+        setPreviewError(msg)
+        showTooLargeFromMessage(msg)
         return
       }
       const leads = data.leads ?? []
@@ -352,9 +370,10 @@ export default function CampaignManagerPage() {
       )
       if (data.duplicateLookupError) setDuplicateLookupError(data.duplicateLookupError)
     } catch (e) {
-      setPreviewError(
+      const msg =
         e instanceof Error ? formatPreviewError(0, { error: e.message }) : formatPreviewError(0, null)
-      )
+      setPreviewError(msg)
+      showTooLargeFromMessage(msg)
     } finally {
       setPreviewLoading(false)
     }
@@ -373,6 +392,12 @@ export default function CampaignManagerPage() {
     setStatus(null)
     try {
       const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
+      if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
+        const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
+        setStatus({ type: "error", message: msg })
+        openCsvTooLargeDialog(csvTooLarge.show, { uploadBytes: uploadFile.size })
+        return
+      }
       const formData = new FormData()
       formData.append("file", uploadFile)
       formData.append("campaignName", campaignName)
@@ -425,6 +450,13 @@ export default function CampaignManagerPage() {
     setEnrichmentProgress(null)
     try {
       const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
+      if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
+        const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
+        setInlineError(msg)
+        openCsvTooLargeDialog(csvTooLarge.show, { uploadBytes: uploadFile.size })
+        setInlineLoading(false)
+        return
+      }
       const formData = new FormData()
       formData.append("file", uploadFile)
       formData.append("campaignName", campaignName)
@@ -1455,6 +1487,7 @@ export default function CampaignManagerPage() {
           </CardContent>
         </Card>
       </div>
+      {csvTooLarge.dialog}
     </AppShell>
   )
 }
