@@ -20,7 +20,15 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { TargetIcon, UploadIcon, CheckCircle2Icon, CircleIcon, Trash2Icon } from "lucide-react"
-import { buildUploadCsvFile, sliceRows } from "@/lib/csv-truncate"
+import {
+  buildUploadCsvFile,
+  countCsvDataRows,
+  formatBytes,
+  isAllRowsPreviewBlocked,
+  sliceRows,
+  VERCEL_UPLOAD_LIMIT_BYTES,
+} from "@/lib/csv-truncate"
+import { formatPreviewError } from "@/lib/preview-errors"
 
 /** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
 type PreviewCompanyInfo = {
@@ -223,6 +231,8 @@ export default function CampaignManagerPage() {
     company_description: string | null
     existingCampaigns: Array<{ id: string; name: string | null }>
   }>>([])
+  /** Total data rows in the selected CSV file (for display). */
+  const [fileCsvRowCount, setFileCsvRowCount] = React.useState<number | null>(null)
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
   const [previewLimit, setPreviewLimit] = React.useState<string>("50")
   const [previewLoading, setPreviewLoading] = React.useState(false)
@@ -239,6 +249,10 @@ export default function CampaignManagerPage() {
 
   React.useEffect(() => {
     setExcludePreviewIndices([])
+    setAllPreviewLeads([])
+    setPreviewCsvTotal(null)
+    setDuplicateLookupError(null)
+    setPreviewError(null)
   }, [previewLimit])
 
   const loadClients = React.useCallback(async () => {
@@ -273,10 +287,20 @@ export default function CampaignManagerPage() {
     setExcludePreviewIndices([])
     setPreviewError(null)
     setPreviewCsvTotal(null)
+    setFileCsvRowCount(null)
+    if (f) {
+      void countCsvDataRows(f).then(setFileCsvRowCount).catch(() => setFileCsvRowCount(null))
+    }
   }
 
   const handlePreview = async () => {
     if (!file) return
+
+    if (previewLimit === "all" && isAllRowsPreviewBlocked(file)) {
+      setPreviewError(formatPreviewError(413, null, { preflightAll: true }))
+      return
+    }
+
     setPreviewLoading(true)
     setPreviewError(null)
     setAllPreviewLeads([])
@@ -284,8 +308,14 @@ export default function CampaignManagerPage() {
     setDuplicateLookupError(null)
     setPreviewCsvTotal(null)
     try {
+      const uploadFile = await buildUploadCsvFile(file, previewLimit, [])
+      if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
+        setPreviewError(formatPreviewError(413, null, { uploadBytes: uploadFile.size }))
+        return
+      }
+
       const formData = new FormData()
-      formData.append("file", file)
+      formData.append("file", uploadFile)
       formData.append("supabaseProject", supabaseProject)
       const res = await fetch("/api/campaign-manager/preview", { method: "POST", body: formData })
       const data = (await res.json().catch(() => ({}))) as {
@@ -301,9 +331,10 @@ export default function CampaignManagerPage() {
         total?: number
         duplicateLookupError?: string
         error?: string
+        code?: string
       }
       if (!res.ok) {
-        setPreviewError(data.error || res.statusText || "Preview failed")
+        setPreviewError(formatPreviewError(res.status, data))
         return
       }
       const leads = data.leads ?? []
@@ -321,7 +352,9 @@ export default function CampaignManagerPage() {
       )
       if (data.duplicateLookupError) setDuplicateLookupError(data.duplicateLookupError)
     } catch (e) {
-      setPreviewError(e instanceof Error ? e.message : "Preview failed")
+      setPreviewError(
+        e instanceof Error ? formatPreviewError(0, { error: e.message }) : formatPreviewError(0, null)
+      )
     } finally {
       setPreviewLoading(false)
     }
@@ -695,7 +728,20 @@ export default function CampaignManagerPage() {
                   onChange={handleFileChange}
                 />
                 <UploadIcon className="mx-auto h-8 w-8 text-muted-foreground mb-2" />
-                <p className="text-sm text-muted-foreground">{file ? file.name : "Click to select CSV"}</p>
+                <p className="text-sm text-muted-foreground">
+                  {file ? (
+                    <>
+                      {file.name}
+                      <span className="text-muted-foreground/80">
+                        {" "}
+                        · {formatBytes(file.size)}
+                        {fileCsvRowCount != null ? ` · ~${fileCsvRowCount.toLocaleString()} rows` : ""}
+                      </span>
+                    </>
+                  ) : (
+                    "Click to select CSV"
+                  )}
+                </p>
               </div>
             </div>
 
@@ -787,7 +833,29 @@ export default function CampaignManagerPage() {
                 <span className="text-sm font-medium">Campaign automation (in-app hitlist)</span>
               </label>
             </div>
-            <div className="flex flex-wrap gap-2 items-center">
+            <div className="flex flex-wrap gap-3 items-end">
+              <div className="flex items-center gap-2">
+                <Label htmlFor="cm-preview-limit" className="text-xs text-muted-foreground whitespace-nowrap">
+                  Rows to preview
+                </Label>
+                <Select value={previewLimit} onValueChange={setPreviewLimit}>
+                  <SelectTrigger id="cm-preview-limit" className="h-8 w-[120px]">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="10">10</SelectItem>
+                    <SelectItem value="25">25</SelectItem>
+                    <SelectItem value="50">50</SelectItem>
+                    <SelectItem value="100">100</SelectItem>
+                    <SelectItem value="150">150</SelectItem>
+                    <SelectItem value="200">200</SelectItem>
+                    <SelectItem value="all" disabled={isAllRowsPreviewBlocked(file)}>
+                      All
+                      {fileCsvRowCount != null ? ` (${fileCsvRowCount.toLocaleString()})` : ""}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
               <Button
                 type="button"
                 variant="outline"
@@ -797,39 +865,36 @@ export default function CampaignManagerPage() {
               >
                 {previewLoading ? "Loading…" : "Preview cleaned leads"}
               </Button>
-              <span className="text-xs text-muted-foreground">Uses same CSV as above. Shows parser & cleaner result (row count selectable).</span>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Only the selected row count is sent to the server (hosted deploy has a ~4.5MB upload limit). Same cap applies to Create / Send to n8n. Changing rows clears preview — click Preview again.
+              {isAllRowsPreviewBlocked(file) && previewLimit !== "all" && (
+                <span className="block mt-1 text-amber-700 dark:text-amber-400">
+                  Full-file preview is disabled for this CSV (too large). Use 50–200 rows or split the file.
+                </span>
+              )}
+            </p>
             {previewError && <p className="text-sm text-destructive">{previewError}</p>}
             {allPreviewLeads.length > 0 && (
               <div className="space-y-2 rounded-md border bg-muted/10 p-4">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-sm font-medium">
                     Parser & cleaner preview ({previewLeads.length.toLocaleString()}
-                    {previewCsvTotal != null && previewCsvTotal > previewLeads.length
-                      ? ` of ${previewCsvTotal.toLocaleString()}`
-                      : ""}{" "}
+                    {fileCsvRowCount != null &&
+                    previewLimit !== "all" &&
+                    fileCsvRowCount > previewLeads.length
+                      ? ` of ${fileCsvRowCount.toLocaleString()} in CSV`
+                      : previewCsvTotal != null && previewCsvTotal > previewLeads.length
+                        ? ` of ${previewCsvTotal.toLocaleString()} parsed`
+                        : ""}{" "}
                     rows)
                   </p>
-                  <div className="flex items-center gap-2">
-                    <Label htmlFor="cm-preview-limit" className="text-xs text-muted-foreground">Rows to use</Label>
-                    <Select value={previewLimit} onValueChange={setPreviewLimit}>
-                      <SelectTrigger id="cm-preview-limit" className="h-8 w-[110px]">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="10">10</SelectItem>
-                        <SelectItem value="25">25</SelectItem>
-                        <SelectItem value="50">50</SelectItem>
-                        <SelectItem value="100">100</SelectItem>
-                        <SelectItem value="all">
-                          All ({previewCsvTotal != null ? previewCsvTotal.toLocaleString() : allPreviewLeads.length.toLocaleString()})
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Upload cap: {previewLimit === "all" ? "all rows" : `${previewLimit} rows`}
+                  </p>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create. Rows highlighted in yellow already belong to another campaign (matched by LinkedIn URL). The “Rows to use” selector caps both this preview and the rows actually sent on Create / Send to n8n.
+                  Bullets (•), hyphens (-), and leading dots removed; spaces collapsed. Remove rows you don’t want in the campaign—excluded rows are not sent when you click Create. Rows highlighted in yellow already belong to another campaign (matched by LinkedIn URL).
                 </p>
                 {duplicateLookupError && (
                   <p className="text-xs text-amber-600 dark:text-amber-400">

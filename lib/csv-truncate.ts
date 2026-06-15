@@ -4,6 +4,9 @@
  * parser so quoted fields with embedded newlines are not split mid-record.
  */
 
+/** Vercel serverless request body limit (~4.5MB); stay under for safety margin. */
+export const VERCEL_UPLOAD_LIMIT_BYTES = 4_000_000
+
 /** Split CSV text into logical rows, honoring quoted fields with embedded newlines. */
 function splitCsvIntoLogicalRows(csvText: string): string[] {
   const rows: string[] = []
@@ -88,4 +91,22 @@ export async function buildUploadCsvFile(
     return new File([header], file.name, { type: file.type || "text/csv" })
   }
   return new File([[header, ...dataRows].join("\n")], file.name, { type: file.type || "text/csv" })
+}
+
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** Count data rows in a CSV (excludes header). */
+export async function countCsvDataRows(file: File): Promise<number> {
+  const text = await file.text()
+  const rows = splitCsvIntoLogicalRows(text).filter((l) => l.trim())
+  return Math.max(0, rows.length - 1)
+}
+
+/** Block "All rows" preview when the raw file exceeds the hosted upload limit. */
+export function isAllRowsPreviewBlocked(file: File | null): boolean {
+  return file != null && file.size > VERCEL_UPLOAD_LIMIT_BYTES
 }
