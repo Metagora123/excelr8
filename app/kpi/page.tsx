@@ -42,6 +42,7 @@ import {
   UserPlusIcon,
   HeartIcon,
   SendIcon,
+  MailOpenIcon,
   UserXIcon,
   EyeOffIcon,
   RotateCwIcon,
@@ -411,6 +412,16 @@ export default function KPIDashboardPage() {
                       {(totals.comments_made + totals.likes_reactions).toLocaleString()}
                     </CardTitle>
                     <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code> (comments + likes)</p>
+                  </CardHeader>
+                </Card>
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardDescription>Replies Received</CardDescription>
+                    <CardTitle className="flex items-center gap-2">
+                      <MailOpenIcon className="h-4 w-4" />
+                      {(totals.replies_received ?? 0).toLocaleString()}
+                    </CardTitle>
+                    <p className="text-xs text-muted-foreground mt-1">Table: <code className="bg-muted px-1 rounded">campaigns</code></p>
                   </CardHeader>
                 </Card>
 

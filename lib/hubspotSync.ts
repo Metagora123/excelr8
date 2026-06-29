@@ -79,6 +79,9 @@ export async function runHubSpotSync(
   const startedAt = Date.now()
   const apiBase = getHubSpotApiBase()
   const logs: string[] = []
+  // #region agent log
+  fetch('http://127.0.0.1:7422/ingest/3787d631-f834-43a2-be39-08d50feb8a38',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cd9fd3'},body:JSON.stringify({sessionId:'cd9fd3',location:'hubspotSync.ts:runHubSpotSync:start',message:'sync pipeline start',data:{project,trigger,apiBase},timestamp:Date.now(),hypothesisId:'D'})}).catch(()=>{});
+  // #endregion
 
   try {
     const [leads, campaigns, leadCampaigns, postsByLead] = await Promise.all([

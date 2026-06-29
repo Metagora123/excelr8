@@ -197,6 +197,7 @@ export async function GET(req: Request) {
     const totals = {
       campaigns: totalsBase.campaigns,
       messages_sent: messagesSentTotal,
+      replies_received: totalsBase.replies_received,
       comments_made: totalsBase.comments_made,
       likes_reactions: totalsBase.likes_reactions,
       // Source of truth for invites is in_app_campaign_automations only.

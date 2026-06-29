@@ -18,6 +18,7 @@ export type KpiTotals = {
   campaigns: number
   messages_sent: number
   invites_sent: number
+  replies_received: number
   comments_made: number
   likes_reactions: number
 }
@@ -83,12 +84,14 @@ export async function getKpiTotals(project: SupabaseProject = "sales2k25"): Prom
     campaigns: campaigns.length,
     messages_sent: 0,
     invites_sent: 0,
+    replies_received: 0,
     comments_made: 0,
     likes_reactions: 0,
   }
   for (const c of campaigns) {
     totals.messages_sent += c.messages_sent ?? 0
     totals.invites_sent += c.invites_sent ?? 0
+    totals.replies_received += c.replies_received ?? 0
     totals.comments_made += c.comments_made ?? 0
     totals.likes_reactions += c.likes_reactions ?? 0
   }

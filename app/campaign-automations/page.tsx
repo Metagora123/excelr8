@@ -92,6 +92,7 @@ type AutomationRow = {
   campaign_messages_sent?: number | null
   campaign_comments_made?: number | null
   campaign_likes_reactions?: number | null
+  campaign_replies_received?: number | null
   // In-app messaging (Block 2)
   messaging_runner?: "off" | "in_app"
   messaging_quota_daily?: number
@@ -595,6 +596,7 @@ export default function CampaignAutomationsPage() {
                       <TableCell className="text-muted-foreground text-xs">
                         <span className="block">Invites: {(a.campaign_invites_sent ?? 0).toLocaleString()}</span>
                         <span className="block">Messages: {(a.campaign_messages_sent ?? 0).toLocaleString()}</span>
+                        <span className="block">Replies: {(a.campaign_replies_received ?? 0).toLocaleString()}</span>
                         <span className="block">Comments: {(a.campaign_comments_made ?? 0).toLocaleString()} · Likes: {(a.campaign_likes_reactions ?? 0).toLocaleString()}</span>
                       </TableCell>
                       <TableCell className="min-w-[210px]">

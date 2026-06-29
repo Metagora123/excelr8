@@ -31,6 +31,24 @@ import {
 import { formatPreviewError } from "@/lib/preview-errors"
 import { isCsvTooLargeErrorMessage, openCsvTooLargeDialog } from "@/lib/csv-upload-errors"
 import { useCsvTooLargeDialog } from "@/components/csv-too-large-dialog"
+import {
+  CsvRowSelectionControls,
+  DEFAULT_ROW_SELECTION_UI,
+} from "@/components/csv-row-selection-controls"
+import {
+  describeCsvRowSelection,
+  isAllRowsSelection,
+  toCsvRowSelection,
+  type RowSelectionUiState,
+} from "@/lib/csv-row-selection"
+import {
+  formatInlineStreamError,
+  inlineErrorToDisplayText,
+} from "@/lib/inline-stream-errors"
+import {
+  InlineStreamErrorPanel,
+  useInlineStreamErrorDialog,
+} from "@/components/inline-stream-error-dialog"
 
 /** Clay company intelligence + ICP scores parsed from a CSV row, as returned by the preview API. */
 type PreviewCompanyInfo = {
@@ -158,6 +176,7 @@ const INLINE_CHECKPOINTS: { key: InlineCheckpointKey; label: string }[] = [
 
 export default function CampaignManagerPage() {
   const csvTooLarge = useCsvTooLargeDialog()
+  const inlineStreamError = useInlineStreamErrorDialog()
   const [campaignName, setCampaignName] = React.useState("")
   const [clientId, setClientId] = React.useState("")
   const [category, setCategory] = React.useState("")
@@ -237,7 +256,8 @@ export default function CampaignManagerPage() {
   /** Total data rows in the selected CSV file (for display). */
   const [fileCsvRowCount, setFileCsvRowCount] = React.useState<number | null>(null)
   const [excludePreviewIndices, setExcludePreviewIndices] = React.useState<number[]>([])
-  const [previewLimit, setPreviewLimit] = React.useState<string>("50")
+  const [rowSelection, setRowSelection] = React.useState<RowSelectionUiState>(DEFAULT_ROW_SELECTION_UI)
+  const csvSelection = React.useMemo(() => toCsvRowSelection(rowSelection), [rowSelection])
   const [previewLoading, setPreviewLoading] = React.useState(false)
   const [previewError, setPreviewError] = React.useState<string | null>(null)
   const [duplicateLookupError, setDuplicateLookupError] = React.useState<string | null>(null)
@@ -245,10 +265,10 @@ export default function CampaignManagerPage() {
   const [previewCsvTotal, setPreviewCsvTotal] = React.useState<number | null>(null)
   const inlineInputRef = React.useRef<HTMLInputElement>(null)
 
-  const previewLeads = React.useMemo(
-    () => sliceRows(allPreviewLeads, previewLimit),
-    [allPreviewLeads, previewLimit]
-  )
+  const previewLeads = React.useMemo(() => {
+    if (rowSelection.mode === "range") return allPreviewLeads
+    return sliceRows(allPreviewLeads, rowSelection.firstCount)
+  }, [allPreviewLeads, rowSelection])
 
   React.useEffect(() => {
     setExcludePreviewIndices([])
@@ -256,7 +276,7 @@ export default function CampaignManagerPage() {
     setPreviewCsvTotal(null)
     setDuplicateLookupError(null)
     setPreviewError(null)
-  }, [previewLimit])
+  }, [rowSelection])
 
   const loadClients = React.useCallback(async () => {
     try {
@@ -305,10 +325,19 @@ export default function CampaignManagerPage() {
     }
   }
 
+  const reportInlineFailure = React.useCallback(
+    (ctx: Parameters<typeof formatInlineStreamError>[0]) => {
+      const detail = formatInlineStreamError(ctx)
+      setInlineError(inlineErrorToDisplayText(detail))
+      inlineStreamError.show(detail)
+    },
+    [inlineStreamError]
+  )
+
   const handlePreview = async () => {
     if (!file) return
 
-    if (previewLimit === "all" && isAllRowsPreviewBlocked(file)) {
+    if (isAllRowsSelection(csvSelection) && isAllRowsPreviewBlocked(file)) {
       const msg = formatPreviewError(413, null, { preflightAll: true })
       setPreviewError(msg)
       openCsvTooLargeDialog(csvTooLarge.show, { preflightAll: true, fileBytes: file.size })
@@ -322,7 +351,7 @@ export default function CampaignManagerPage() {
     setDuplicateLookupError(null)
     setPreviewCsvTotal(null)
     try {
-      const uploadFile = await buildUploadCsvFile(file, previewLimit, [])
+      const uploadFile = await buildUploadCsvFile(file, csvSelection, [])
       if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
         const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
         setPreviewError(msg)
@@ -391,7 +420,7 @@ export default function CampaignManagerPage() {
     setLoading(true)
     setStatus(null)
     try {
-      const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
+      const uploadFile = await buildUploadCsvFile(file, csvSelection, excludePreviewIndices)
       if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
         const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
         setStatus({ type: "error", message: msg })
@@ -413,7 +442,7 @@ export default function CampaignManagerPage() {
         return
       }
       const kept = previewLeads.length - excludePreviewIndices.length
-      const limitNote = previewLimit === "all" && previewCsvTotal != null
+      const limitNote = isAllRowsSelection(csvSelection) && previewCsvTotal != null
         ? ` (${kept.toLocaleString()} rows)`
         : ` (${kept} of ${previewLeads.length} rows)`
       setStatus({ type: "success", message: `Campaign sent to n8n${limitNote}.` })
@@ -440,6 +469,7 @@ export default function CampaignManagerPage() {
     }
     setInlineLoading(true)
     setInlineError(null)
+    inlineStreamError.setDetail(null)
     setInlineCheckpoints({} as Record<InlineCheckpointKey, boolean>)
     setInlineResult(null)
     setHitlistSchema(null)
@@ -448,8 +478,13 @@ export default function CampaignManagerPage() {
     setRollbackMessage(null)
     setEnrichmentLogs([])
     setEnrichmentProgress(null)
+    const streamState = {
+      lastCheckpoint: null as string | null,
+      lastEnrichmentProgress: null as { done: number; total: number; currentLead: string | null } | null,
+      streamCompleted: false,
+    }
     try {
-      const uploadFile = await buildUploadCsvFile(file, previewLimit, excludePreviewIndices)
+      const uploadFile = await buildUploadCsvFile(file, csvSelection, excludePreviewIndices)
       if (uploadFile.size > VERCEL_UPLOAD_LIMIT_BYTES) {
         const msg = formatPreviewError(413, null, { uploadBytes: uploadFile.size })
         setInlineError(msg)
@@ -472,18 +507,163 @@ export default function CampaignManagerPage() {
       const res = await fetch("/api/campaign-manager/inline", { method: "POST", body: formData })
       if (!res.ok) {
         const data = await res.json().catch(() => ({}))
-        setInlineError(data.error || res.statusText || "Request failed")
+        reportInlineFailure({
+          error: data.error || res.statusText || "Request failed",
+          httpStatus: res.status,
+        })
         setInlineLoading(false)
         return
       }
       const reader = res.body?.getReader()
       const decoder = new TextDecoder()
       if (!reader) {
-        setInlineError("No response body")
+        reportInlineFailure({ error: "No response body from server stream" })
         setInlineLoading(false)
         return
       }
       let buffer = ""
+
+      const applyStreamLine = (obj: Record<string, unknown>) => {
+        if (typeof obj.checkpoint === "string") {
+          const cp = obj.checkpoint as InlineCheckpointKey
+          streamState.lastCheckpoint = cp
+          if (cp === "completed") streamState.streamCompleted = true
+          setInlineCheckpoints((prev) => ({ ...prev, [cp]: true }))
+        }
+        if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
+          setAutoLikeSchema({
+            schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+            schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+            fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({
+              name: f.name ?? "",
+              type: f.type ?? "",
+            })),
+          })
+        }
+        if (typeof obj.autoLikeZeroRowsMessage === "string") {
+          setInlineResult((prev) =>
+            prev
+              ? { ...prev, autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }
+              : { campaignId: "", autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }
+          )
+        }
+        if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
+          setHitlistSchema({
+            schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
+            schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
+            fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({
+              name: f.name ?? "",
+              type: f.type ?? "",
+            })),
+          })
+        }
+        if (obj.error != null) {
+          let msg = String(obj.error) + (obj.detail ? `: ${obj.detail}` : "")
+          if (excludePreviewIndices.length > 0 && /no valid leads|0 lead/i.test(msg)) {
+            msg +=
+              " You excluded rows from the preview; if all CSV rows were excluded, add fewer exclusions or re-run Preview to reset."
+          }
+          reportInlineFailure({ error: msg, lastCheckpoint: streamState.lastCheckpoint, enrichmentProgress: streamState.lastEnrichmentProgress })
+        }
+        if (obj.campaignId != null) {
+          setInlineResult((prev) => ({
+            ...prev,
+            campaignId: String(obj.campaignId),
+            airtableHitlistUrl: obj.airtableHitlistUrl != null ? String(obj.airtableHitlistUrl) : undefined,
+            airtableAutoLikeUrl: obj.airtableAutoLikeUrl != null ? String(obj.airtableAutoLikeUrl) : undefined,
+            n8nHitlistWorkflowUrl:
+              obj.n8nHitlistWorkflowUrl != null ? String(obj.n8nHitlistWorkflowUrl) : undefined,
+            n8nAutoLikeWorkflowUrl:
+              obj.n8nAutoLikeWorkflowUrl != null ? String(obj.n8nAutoLikeWorkflowUrl) : undefined,
+            leadsCount: typeof obj.leadsCount === "number" ? obj.leadsCount : undefined,
+            airtableUrlsSaved: obj.airtableUrlsSaved === true ? true : prev?.airtableUrlsSaved,
+            enrichmentSummary:
+              obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
+                ? (obj.enrichmentSummary as {
+                    enrichedCount: number
+                    failedCount: number
+                    skipCount: number
+                    logs: Array<{
+                      type: string
+                      profile_url: string
+                      full_name: string | null
+                      message: string
+                      postsStored?: number
+                    }>
+                  })
+                : prev?.enrichmentSummary,
+          }))
+        }
+        if (obj.enrichment_progress != null && typeof obj.enrichment_progress === "object") {
+          const p = obj.enrichment_progress as { done?: number; total?: number; currentLead?: string | null }
+          const progress = {
+            done: typeof p.done === "number" ? p.done : 0,
+            total: typeof p.total === "number" ? p.total : 0,
+            currentLead: typeof p.currentLead === "string" ? p.currentLead : null,
+          }
+          streamState.lastEnrichmentProgress = progress
+          setEnrichmentProgress(progress)
+        }
+        if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
+          const e = obj.enrichment_log as {
+            type?: string
+            profile_url?: string
+            full_name?: string | null
+            message?: string
+            postsStored?: number
+          }
+          setEnrichmentLogs((prev) => [
+            ...prev,
+            {
+              type: e.type ?? "skip",
+              profile_url: e.profile_url ?? "",
+              full_name: e.full_name ?? null,
+              message: e.message ?? "",
+              postsStored: e.postsStored,
+            },
+          ])
+        }
+        if (obj.enrichment_summary != null && typeof obj.enrichment_summary === "object") {
+          const s = obj.enrichment_summary as {
+            enrichedCount?: number
+            failedCount?: number
+            skipCount?: number
+            logs?: unknown[]
+          }
+          setInlineResult((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  enrichmentSummary: {
+                    enrichedCount: s.enrichedCount ?? 0,
+                    failedCount: s.failedCount ?? 0,
+                    skipCount: s.skipCount ?? 0,
+                    logs: Array.isArray(s.logs)
+                      ? (s.logs as Array<{
+                          type: string
+                          profile_url: string
+                          full_name: string | null
+                          message: string
+                          postsStored?: number
+                        }>)
+                      : [],
+                  },
+                }
+              : null
+          )
+        }
+        if (obj.checkpoint === "completed" && obj.rollback && typeof obj.rollback === "object") {
+          const r = obj.rollback as Record<string, unknown>
+          setRollback({
+            airtableBaseId: r.airtableBaseId != null ? String(r.airtableBaseId) : undefined,
+            airtableHitlistTableId: r.airtableHitlistTableId != null ? String(r.airtableHitlistTableId) : undefined,
+            airtableAutoLikeTableId: r.airtableAutoLikeTableId != null ? String(r.airtableAutoLikeTableId) : undefined,
+            n8nAutoLikeWorkflowId: r.n8nAutoLikeWorkflowId != null ? String(r.n8nAutoLikeWorkflowId) : undefined,
+            n8nHitlistWorkflowId: r.n8nHitlistWorkflowId != null ? String(r.n8nHitlistWorkflowId) : undefined,
+          })
+        }
+      }
+
       while (true) {
         const { done, value } = await reader.read()
         if (done) break
@@ -493,78 +673,7 @@ export default function CampaignManagerPage() {
         for (const line of lines) {
           if (!line.trim()) continue
           try {
-            const obj = JSON.parse(line) as Record<string, unknown>
-            if (typeof obj.checkpoint === "string") {
-              const cp = obj.checkpoint as InlineCheckpointKey
-              setInlineCheckpoints((prev) => ({ ...prev, [cp]: true }))
-            }
-            if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
-              setAutoLikeSchema({
-                schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
-                schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
-                fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
-              })
-            }
-            if (typeof obj.autoLikeZeroRowsMessage === "string") {
-              setInlineResult((prev) => (prev ? { ...prev, autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string } : { campaignId: "", autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }))
-            }
-            if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
-              setHitlistSchema({
-                schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
-                schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
-                fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
-              })
-            }
-            if (obj.error != null) {
-              let msg = String(obj.error) + (obj.detail ? `: ${obj.detail}` : "")
-              if (excludePreviewIndices.length > 0 && /no valid leads|0 lead/i.test(msg)) {
-                msg += " You excluded rows from the preview; if all CSV rows were excluded, add fewer exclusions or re-run Preview to reset."
-              }
-              setInlineError(msg)
-            }
-            if (obj.campaignId != null) {
-              setInlineResult((prev) => ({
-                ...prev,
-                campaignId: String(obj.campaignId),
-                airtableHitlistUrl: obj.airtableHitlistUrl != null ? String(obj.airtableHitlistUrl) : undefined,
-                airtableAutoLikeUrl: obj.airtableAutoLikeUrl != null ? String(obj.airtableAutoLikeUrl) : undefined,
-                n8nHitlistWorkflowUrl: obj.n8nHitlistWorkflowUrl != null ? String(obj.n8nHitlistWorkflowUrl) : undefined,
-                n8nAutoLikeWorkflowUrl: obj.n8nAutoLikeWorkflowUrl != null ? String(obj.n8nAutoLikeWorkflowUrl) : undefined,
-                leadsCount: typeof obj.leadsCount === "number" ? obj.leadsCount : undefined,
-              airtableUrlsSaved:
-                obj.airtableUrlsSaved === true ? true : prev?.airtableUrlsSaved,
-                enrichmentSummary:
-                  obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
-                    ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
-                    : prev?.enrichmentSummary,
-              }))
-            }
-            if (obj.enrichment_progress != null && typeof obj.enrichment_progress === "object") {
-              const p = obj.enrichment_progress as { done?: number; total?: number; currentLead?: string | null }
-              setEnrichmentProgress({
-                done: typeof p.done === "number" ? p.done : 0,
-                total: typeof p.total === "number" ? p.total : 0,
-                currentLead: typeof p.currentLead === "string" ? p.currentLead : null,
-              })
-            }
-            if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
-              const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
-              setEnrichmentLogs((prev) => [...prev, { type: e.type ?? "skip", profile_url: e.profile_url ?? "", full_name: e.full_name ?? null, message: e.message ?? "", postsStored: e.postsStored }])
-            }
-            if (obj.enrichment_summary != null && typeof obj.enrichment_summary === "object") {
-              const s = obj.enrichment_summary as { enrichedCount?: number; failedCount?: number; skipCount?: number; logs?: unknown[] }
-              setInlineResult((prev) => prev ? { ...prev, enrichmentSummary: { enrichedCount: s.enrichedCount ?? 0, failedCount: s.failedCount ?? 0, skipCount: s.skipCount ?? 0, logs: Array.isArray(s.logs) ? s.logs as Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> : [] } } : null)
-            }
-            if (obj.checkpoint === "completed" && obj.rollback && typeof obj.rollback === "object") {
-              const r = obj.rollback as Record<string, unknown>
-              setRollback({
-                airtableBaseId: r.airtableBaseId != null ? String(r.airtableBaseId) : undefined,
-                airtableHitlistTableId: r.airtableHitlistTableId != null ? String(r.airtableHitlistTableId) : undefined,
-                airtableAutoLikeTableId: r.airtableAutoLikeTableId != null ? String(r.airtableAutoLikeTableId) : undefined,
-                n8nAutoLikeWorkflowId: r.n8nAutoLikeWorkflowId != null ? String(r.n8nAutoLikeWorkflowId) : undefined,
-                n8nHitlistWorkflowId: r.n8nHitlistWorkflowId != null ? String(r.n8nHitlistWorkflowId) : undefined,
-              })
-            }
+            applyStreamLine(JSON.parse(line) as Record<string, unknown>)
           } catch {
             // skip malformed line
           }
@@ -572,77 +681,32 @@ export default function CampaignManagerPage() {
       }
       if (buffer.trim()) {
         try {
-          const obj = JSON.parse(buffer) as Record<string, unknown>
-          if (typeof obj.checkpoint === "string") {
-            const cp = obj.checkpoint as InlineCheckpointKey
-            setInlineCheckpoints((prev) => ({ ...prev, [cp]: true }))
-          }
-          if (obj.checkpoint === "airtable_auto_like_table_created" && obj.fields && Array.isArray(obj.fields)) {
-            setAutoLikeSchema({
-              schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
-              schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
-              fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
-            })
-          }
-          if (typeof obj.autoLikeZeroRowsMessage === "string") {
-            setInlineResult((prev) => (prev ? { ...prev, autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string } : { campaignId: "", autoLikeZeroRowsMessage: obj.autoLikeZeroRowsMessage as string }))
-          }
-          if (obj.checkpoint === "airtable_hitlist_table_created" && obj.fields && Array.isArray(obj.fields)) {
-            setHitlistSchema({
-              schemaSource: (obj.schemaSource === "airtable" ? "airtable" : "static") as "airtable" | "static",
-              schemaError: typeof obj.schemaError === "string" ? obj.schemaError : undefined,
-              fields: (obj.fields as Array<{ name: string; type: string }>).map((f) => ({ name: f.name ?? "", type: f.type ?? "" })),
-            })
-          }
-          if (obj.error != null) setInlineError(String(obj.error))
-          if (obj.campaignId != null) {
-            setInlineResult((prev) => ({
-              ...prev,
-              campaignId: String(obj.campaignId),
-              airtableHitlistUrl: obj.airtableHitlistUrl != null ? String(obj.airtableHitlistUrl) : undefined,
-              airtableAutoLikeUrl: obj.airtableAutoLikeUrl != null ? String(obj.airtableAutoLikeUrl) : undefined,
-              n8nHitlistWorkflowUrl: obj.n8nHitlistWorkflowUrl != null ? String(obj.n8nHitlistWorkflowUrl) : undefined,
-              n8nAutoLikeWorkflowUrl: obj.n8nAutoLikeWorkflowUrl != null ? String(obj.n8nAutoLikeWorkflowUrl) : undefined,
-              leadsCount: typeof obj.leadsCount === "number" ? obj.leadsCount : undefined,
-              airtableUrlsSaved: obj.airtableUrlsSaved === true ? true : prev?.airtableUrlsSaved,
-              enrichmentSummary:
-                obj.enrichmentSummary != null && typeof obj.enrichmentSummary === "object"
-                  ? (obj.enrichmentSummary as { enrichedCount: number; failedCount: number; skipCount: number; logs: Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }> })
-                  : prev?.enrichmentSummary,
-            }))
-          }
-          if (obj.enrichment_progress != null && typeof obj.enrichment_progress === "object") {
-            const p = obj.enrichment_progress as { done?: number; total?: number; currentLead?: string | null }
-            setEnrichmentProgress({
-              done: typeof p.done === "number" ? p.done : 0,
-              total: typeof p.total === "number" ? p.total : 0,
-              currentLead: typeof p.currentLead === "string" ? p.currentLead : null,
-            })
-          }
-          if (obj.enrichment_log != null && typeof obj.enrichment_log === "object") {
-            const e = obj.enrichment_log as { type?: string; profile_url?: string; full_name?: string | null; message?: string; postsStored?: number }
-            setEnrichmentLogs((prev) => [...prev, { type: e.type ?? "skip", profile_url: e.profile_url ?? "", full_name: e.full_name ?? null, message: e.message ?? "", postsStored: e.postsStored }])
-          }
-          if (obj.enrichment_summary != null && typeof obj.enrichment_summary === "object") {
-            const s = obj.enrichment_summary as { enrichedCount?: number; failedCount?: number; skipCount?: number; logs?: unknown[] }
-            setInlineResult((prev) => prev ? { ...prev, enrichmentSummary: { enrichedCount: s.enrichedCount ?? 0, failedCount: s.failedCount ?? 0, skipCount: s.skipCount ?? 0, logs: Array.isArray(s.logs) ? (s.logs as Array<{ type: string; profile_url: string; full_name: string | null; message: string; postsStored?: number }>) : [] } } : null)
-          }
-          if (obj.checkpoint === "completed" && obj.rollback && typeof obj.rollback === "object") {
-            const r = obj.rollback as Record<string, unknown>
-            setRollback({
-              airtableBaseId: r.airtableBaseId != null ? String(r.airtableBaseId) : undefined,
-              airtableHitlistTableId: r.airtableHitlistTableId != null ? String(r.airtableHitlistTableId) : undefined,
-              airtableAutoLikeTableId: r.airtableAutoLikeTableId != null ? String(r.airtableAutoLikeTableId) : undefined,
-              n8nAutoLikeWorkflowId: r.n8nAutoLikeWorkflowId != null ? String(r.n8nAutoLikeWorkflowId) : undefined,
-              n8nHitlistWorkflowId: r.n8nHitlistWorkflowId != null ? String(r.n8nHitlistWorkflowId) : undefined,
-            })
-          }
+          applyStreamLine(JSON.parse(buffer) as Record<string, unknown>)
         } catch {
           // ignore
         }
       }
+
+      if (
+        !streamState.streamCompleted &&
+        streamState.lastEnrichmentProgress != null &&
+        streamState.lastEnrichmentProgress.total > 0 &&
+        streamState.lastEnrichmentProgress.done < streamState.lastEnrichmentProgress.total
+      ) {
+        reportInlineFailure({
+          streamEndedEarly: true,
+          lastCheckpoint: streamState.lastCheckpoint,
+          enrichmentProgress: streamState.lastEnrichmentProgress,
+          streamCompleted: streamState.streamCompleted,
+        })
+      }
     } catch (e) {
-      setInlineError(e instanceof Error ? e.message : "Request failed")
+      reportInlineFailure({
+        error: e,
+        lastCheckpoint: streamState.lastCheckpoint,
+        enrichmentProgress: streamState.lastEnrichmentProgress,
+        streamCompleted: streamState.streamCompleted,
+      })
     } finally {
       setInlineLoading(false)
     }
@@ -866,28 +930,14 @@ export default function CampaignManagerPage() {
               </label>
             </div>
             <div className="flex flex-wrap gap-3 items-end">
-              <div className="flex items-center gap-2">
-                <Label htmlFor="cm-preview-limit" className="text-xs text-muted-foreground whitespace-nowrap">
-                  Rows to preview
-                </Label>
-                <Select value={previewLimit} onValueChange={setPreviewLimit}>
-                  <SelectTrigger id="cm-preview-limit" className="h-8 w-[120px]">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="10">10</SelectItem>
-                    <SelectItem value="25">25</SelectItem>
-                    <SelectItem value="50">50</SelectItem>
-                    <SelectItem value="100">100</SelectItem>
-                    <SelectItem value="150">150</SelectItem>
-                    <SelectItem value="200">200</SelectItem>
-                    <SelectItem value="all" disabled={isAllRowsPreviewBlocked(file)}>
-                      All
-                      {fileCsvRowCount != null ? ` (${fileCsvRowCount.toLocaleString()})` : ""}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              <CsvRowSelectionControls
+                idPrefix="cm"
+                file={file}
+                fileCsvRowCount={fileCsvRowCount}
+                value={rowSelection}
+                onChange={setRowSelection}
+                firstRowsLabel="Rows to preview"
+              />
               <Button
                 type="button"
                 variant="outline"
@@ -899,10 +949,10 @@ export default function CampaignManagerPage() {
               </Button>
             </div>
             <p className="text-xs text-muted-foreground">
-              Only the selected row count is sent to the server (hosted deploy has a ~4.5MB upload limit). Same cap applies to Create / Send to n8n. Changing rows clears preview — click Preview again.
-              {isAllRowsPreviewBlocked(file) && previewLimit !== "all" && (
+              Only the selected rows are sent to the server (hosted deploy has a ~4.5MB upload limit). Same selection applies to Create / Send to n8n. Changing selection clears preview — click Preview again.
+              {isAllRowsPreviewBlocked(file) && !isAllRowsSelection(csvSelection) && (
                 <span className="block mt-1 text-amber-700 dark:text-amber-400">
-                  Full-file preview is disabled for this CSV (too large). Use 50–200 rows or split the file.
+                  Full-file preview is disabled for this CSV (too large). Use first N rows, a row range (e.g. 51–100), or split the file.
                 </span>
               )}
             </p>
@@ -913,7 +963,8 @@ export default function CampaignManagerPage() {
                   <p className="text-sm font-medium">
                     Parser & cleaner preview ({previewLeads.length.toLocaleString()}
                     {fileCsvRowCount != null &&
-                    previewLimit !== "all" &&
+                    !isAllRowsSelection(csvSelection) &&
+                    rowSelection.mode === "first" &&
                     fileCsvRowCount > previewLeads.length
                       ? ` of ${fileCsvRowCount.toLocaleString()} in CSV`
                       : previewCsvTotal != null && previewCsvTotal > previewLeads.length
@@ -922,7 +973,7 @@ export default function CampaignManagerPage() {
                     rows)
                   </p>
                   <p className="text-xs text-muted-foreground">
-                    Upload cap: {previewLimit === "all" ? "all rows" : `${previewLimit} rows`}
+                    Upload cap: {describeCsvRowSelection(csvSelection, fileCsvRowCount)}
                   </p>
                 </div>
                 <p className="text-xs text-muted-foreground">
@@ -1084,8 +1135,10 @@ export default function CampaignManagerPage() {
               <TargetIcon className="mr-2 h-4 w-4" />
               {inlineLoading ? "Creating…" : "Create Campaign In-App"}
             </Button>
-            {inlineError && (
-              <p className="text-sm text-destructive">{inlineError}</p>
+            {inlineStreamError.detail ? (
+              <InlineStreamErrorPanel detail={inlineStreamError.detail} />
+            ) : (
+              inlineError && <p className="text-sm text-destructive">{inlineError}</p>
             )}
             {inlineResult?.campaignId && (
               <div className="rounded-md border border-green-500/30 bg-green-500/10 p-3 text-sm space-y-2">
@@ -1488,6 +1541,7 @@ export default function CampaignManagerPage() {
         </Card>
       </div>
       {csvTooLarge.dialog}
+      {inlineStreamError.dialog}
     </AppShell>
   )
 }

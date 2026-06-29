@@ -133,15 +133,68 @@ export async function fetchUnipileProfileWithDetails(identifier: string): Promis
   let profile: UnipileProfile | null = null
   let degree: string | null = null
   try {
-    const data = JSON.parse(rawText) as UnipileProfile & { degree?: string | number; connection_degree?: string | number }
+    const data = JSON.parse(rawText) as UnipileProfile & { degree?: string | number; connection_degree?: string | number; network_distance?: string }
     if (data?.provider_id) profile = data
     if (data?.degree != null) degree = String(data.degree)
     else if (data?.connection_degree != null) degree = String(data.connection_degree)
+    else if (data?.network_distance != null) {
+      // Unipile returns network_distance instead of degree for LinkedIn profiles.
+      // Map to the numeric string the acceptance check expects.
+      const nd = String(data.network_distance).toUpperCase()
+      if (nd === "FIRST_DEGREE") degree = "1"
+      else if (nd === "SECOND_DEGREE") degree = "2"
+      else if (nd === "THIRD_DEGREE" || nd === "OUT_OF_NETWORK") degree = "3"
+      else degree = nd
+    }
   } catch {
     // leave profile null
   }
   const responseSnippet = rawText.length > MAX_RESPONSE_SNIPPET ? rawText.slice(0, MAX_RESPONSE_SNIPPET) + "…" : rawText
   return { profile, statusCode: res.status, responseSnippet, degree }
+}
+
+/**
+ * GET /api/v1/chats — check whether a lead has replied to our outreach.
+ * Returns replied: true if the last message in the chat was sent by the lead (not by us).
+ * On any API error or ambiguous response, returns replied: false so sends are never blocked.
+ */
+export async function checkUnipileReply(
+  accountId: string,
+  leadProviderId: string
+): Promise<{ replied: boolean; snippet?: string; _raw?: string }> {
+  try {
+    const q = new URLSearchParams({ account_id: accountId, attendee_provider_id: leadProviderId })
+    const res = await unipileFetch(`/api/v1/chats?${q}`)
+    const rawText = await res.text()
+
+    // Log the raw response so we can verify field names match what Unipile actually returns.
+    // Check run_logs in Supabase: look for step="reply_check_raw" entries to see the actual shape.
+    console.log("[checkUnipileReply] raw response:", rawText.slice(0, 600))
+
+    if (!res.ok) return { replied: false, _raw: rawText.slice(0, 300) }
+    const data = JSON.parse(rawText) as Record<string, unknown>
+
+    // Unipile returns { object: "ChatList", items: [...] } or a plain array
+    const items: unknown[] = Array.isArray(data.items) ? data.items : Array.isArray(data) ? data : []
+    if (items.length === 0) return { replied: false, _raw: rawText.slice(0, 300) }
+
+    const chat = items[0] as Record<string, unknown>
+    const lastMsg = (chat.last_message ?? chat.latest_message) as Record<string, unknown> | null
+    if (!lastMsg) return { replied: false, _raw: rawText.slice(0, 300) }
+
+    const snippet = typeof lastMsg.text === "string" ? lastMsg.text.slice(0, 100) : undefined
+
+    // Prefer boolean is_from_me / from_me if present
+    if (typeof lastMsg.is_from_me === "boolean") return { replied: !lastMsg.is_from_me, snippet, _raw: rawText.slice(0, 300) }
+    if (typeof lastMsg.from_me === "boolean") return { replied: !lastMsg.from_me, snippet, _raw: rawText.slice(0, 300) }
+
+    // Fall back to sender_id comparison
+    const senderId = String(lastMsg.sender_id ?? lastMsg.from_id ?? lastMsg.author_id ?? "").trim()
+    if (!senderId) return { replied: false, _raw: rawText.slice(0, 300) }
+    return { replied: senderId === leadProviderId, snippet, _raw: rawText.slice(0, 300) }
+  } catch {
+    return { replied: false }
+  }
 }
 
 /** POST /api/v1/users/invite — send LinkedIn connection request. accountId = Unipile connected account to send from. */

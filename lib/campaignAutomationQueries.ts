@@ -11,6 +11,7 @@ import {
   fetchUnipileProfileWithDetails,
   sendUnipileInviteWithDetails,
   sendUnipileMessageWithDetails,
+  checkUnipileReply,
 } from "@/lib/enrichment-engine"
 import { getLeadByProfileUrl, generateOutreachMessages } from "@/lib/outreachMessageGenerator"
 
@@ -60,6 +61,7 @@ export type CampaignAutomationRow = {
   campaign_messages_sent?: number | null
   campaign_comments_made?: number | null
   campaign_likes_reactions?: number | null
+  campaign_replies_received?: number | null
   // Block 2 additions
   messaging_runner?: "off" | "in_app"
   messaging_quota_daily?: number
@@ -99,7 +101,7 @@ export async function getCampaignAutomations(
       legacy_migrated,
       created_at,
       updated_at,
-      campaigns ( name, invites_sent, messages_sent, comments_made, likes_reactions )
+      campaigns ( name, invites_sent, messages_sent, comments_made, likes_reactions, replies_received )
     `
     )
     .order("created_at", { ascending: false })
@@ -112,6 +114,7 @@ export async function getCampaignAutomations(
         messages_sent?: number | null
         comments_made?: number | null
         likes_reactions?: number | null
+        replies_received?: number | null
       } | null
     }
   >
@@ -124,6 +127,7 @@ export async function getCampaignAutomations(
       campaign_messages_sent: campaigns?.messages_sent ?? null,
       campaign_comments_made: campaigns?.comments_made ?? null,
       campaign_likes_reactions: campaigns?.likes_reactions ?? null,
+      campaign_replies_received: campaigns?.replies_received ?? null,
       run_logs: Array.isArray(r.run_logs) ? r.run_logs : [],
     } as CampaignAutomationRow
   })
@@ -134,11 +138,26 @@ export async function deleteCampaignAutomation(
   automationId: string
 ): Promise<void> {
   const supabase = createClient(project)
+
+  // Fetch campaign_id before deleting so we can cascade
+  const { data } = await supabase
+    .from("in_app_campaign_automations")
+    .select("campaign_id")
+    .eq("id", automationId)
+    .single()
+  const campaignId = data?.campaign_id
+
   const { error } = await supabase
     .from("in_app_campaign_automations")
     .delete()
     .eq("id", automationId)
   if (error) throw error
+
+  // Clean up the campaign and its lead links so it stops appearing on the campaign status page
+  if (campaignId) {
+    await supabase.from("lead_campaigns").delete().eq("campaign_id", campaignId)
+    await supabase.from("campaigns").delete().eq("id", campaignId)
+  }
 }
 
 export async function updateCampaignAutomationSchedule(
@@ -367,6 +386,7 @@ type RunEntry = {
   messages_sent_count: number
   messaging_failed_count: number
   legacy_migrated_count: number
+  replies_detected_count: number
   leads: LeadLog[]
 }
 
@@ -385,6 +405,7 @@ function emptyRunEntry(): RunEntry {
     messages_sent_count: 0,
     messaging_failed_count: 0,
     legacy_migrated_count: 0,
+    replies_detected_count: 0,
     leads: [],
   }
 }
@@ -969,6 +990,25 @@ async function runMessagingPass(
     }
     leadLog.message_preview = messageText.slice(0, 200)
 
+    // Check if the lead has already replied — skip sending if so.
+    const replyCheck = await checkUnipileReply(unipileAccountId, providerId)
+    leadLog.unipile_reply_check_raw = replyCheck._raw  // visible in run_logs for field-name debugging
+    if (replyCheck.replied) {
+      leadLog.step = "replied"
+      leadLog.decision = "lead_replied_skipping_send"
+      runEntry.replies_detected_count += 1
+      runEntry.leads.push(leadLog)
+      try {
+        await updateAirtableRecord(baseId, airtableToken, tableId, rec.id, { status: "replied" })
+      } catch { /* non-fatal */ }
+      await patchLeadCampaign(supabase, ctx.automation.campaign_id, match.leadId, {
+        message_status: "replied",
+      })
+      processed += 1
+      options.onProgress?.({ processed, total, current: linkedinUrl })
+      continue
+    }
+
     // Send the DM.
     const sendResult = await sendUnipileMessageWithDetails(unipileAccountId, providerId, messageText)
     leadLog.unipile_message_status = sendResult.statusCode
@@ -1232,6 +1272,22 @@ async function persistRunEntry(
       })
       .eq("id", automation.campaign_id)
     if (campErr) console.error("Campaign invites_sent update failed:", campErr)
+  }
+
+  if (runEntry.replies_detected_count > 0 && automation.campaign_id) {
+    const { data: camp } = await supabase
+      .from("campaigns")
+      .select("replies_received")
+      .eq("id", automation.campaign_id)
+      .single()
+    const { error: repliesErr } = await supabase
+      .from("campaigns")
+      .update({
+        replies_received: Number(camp?.replies_received ?? 0) + runEntry.replies_detected_count,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", automation.campaign_id)
+    if (repliesErr) console.error("Campaign replies_received update failed:", repliesErr)
   }
 }
 

@@ -4,6 +4,8 @@
  * parser so quoted fields with embedded newlines are not split mid-record.
  */
 
+import type { CsvRowSelection } from "@/lib/csv-row-selection"
+
 /** Vercel serverless request body limit (~4.5MB); stay under for safety margin. */
 export const VERCEL_UPLOAD_LIMIT_BYTES = 4_000_000
 
@@ -65,24 +67,35 @@ export function sliceRows<T>(rows: T[], limitValue: string): T[] {
 }
 
 /**
- * Build a CSV File for upload: header + first `limit` data rows, minus any excluded
- * indices (0-based within that capped set). Used by preview/upload flows.
+ * Build a CSV File for upload: selected rows minus exclusions.
+ * Exclusions are 0-based indices within the selected slice.
  */
 export async function buildUploadCsvFile(
   file: File,
-  limitValue: string,
+  selection: CsvRowSelection | string,
   excludeIndices: number[] = []
 ): Promise<File> {
-  const limit = resolveRowLimit(limitValue)
+  const sel: CsvRowSelection =
+    typeof selection === "string" ? { kind: "first", count: selection } : selection
+
   const text = await file.text()
   const rows = splitCsvIntoLogicalRows(text).filter((l) => l.trim())
   if (rows.length < 2) return file
 
   const header = rows[0]
   let dataRows = rows.slice(1)
-  if (Number.isFinite(limit)) {
-    dataRows = dataRows.slice(0, limit)
+
+  if (sel.kind === "range") {
+    const start = Math.max(1, sel.start)
+    const end = Math.max(start, sel.end)
+    dataRows = dataRows.slice(start - 1, end)
+  } else {
+    const limit = resolveRowLimit(sel.count)
+    if (Number.isFinite(limit)) {
+      dataRows = dataRows.slice(0, limit)
+    }
   }
+
   if (excludeIndices.length > 0) {
     const exclude = new Set(excludeIndices)
     dataRows = dataRows.filter((_, i) => !exclude.has(i))
