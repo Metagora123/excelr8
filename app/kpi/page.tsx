@@ -58,6 +58,7 @@ type KpiTotals = {
   campaigns: number
   messages_sent: number
   invites_sent: number
+  replies_received: number
   comments_made: number
   likes_reactions: number
   send_failed: number
